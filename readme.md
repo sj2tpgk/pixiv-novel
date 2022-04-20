@@ -3,14 +3,15 @@
 
 ### Usage
 ``` sh
-curl URLHERE > pixiv-novel.py
+curl 'https://raw.githubusercontent.com/sj2tpgk/pixiv-novel/main/pixiv-novel.py' > pixiv-novel.py
 python pixiv-novel.py
+# Automatically opens daily ranking in browser
 ```
 
 ### Screenshots
-<img width="400" src="images/search.png">
-<img width="400" src="images/top.png">
-<img width="400" src="images/novel.png">
+<img width="450" src="images/search.png">
+<img width="450" src="images/top.png">
+<img width="450" src="images/novel.png">
 
 ### Cookies
 To search age-restricted contents, put `cookies.txt` in current directory:
