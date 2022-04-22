@@ -1,5 +1,8 @@
 #/usr/bin/sh
 
+# to skip screenshots: ./make-readme.sh xxx
+skipss=$1
+
 screenshot() {
     out=$1
     url=$2
@@ -16,12 +19,14 @@ screenshot() {
 # generate html for local preview
 md2html readme.md > readme.html
 
-exit
-port=8085
-./pixiv-novel.py -B -p $port &
-pid=$!
-screenshot images/top.png    "http://localhost:$port"
-screenshot images/novel.png  "http://localhost:$port/?cmd=fetch&id=17410715"
-screenshot images/search.png "http://localhost:$port/?cmd=search&q=二次創作&npages=1&bookmarks=0&page=10&compact=1"
-kill $pid
+
+if [ -z "$skipss" ]; then
+    port=8085
+    ./pixiv-novel.py -B -p $port &
+    pid=$!
+    screenshot images/top.png    "http://localhost:$port"
+    screenshot images/novel.png  "http://localhost:$port/?cmd=fetch&id=17410715"
+    screenshot images/search.png "http://localhost:$port/?cmd=search&q=二次創作&npages=1&bookmarks=0&page=10&compact=1"
+    kill $pid
+fi
 

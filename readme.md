@@ -1,11 +1,15 @@
 <!-- automatically generated file; do not edit -->
-# Alternative frontend for pixiv novels
+# Lightweight pixiv novel viewer
+
+Lightweight frontend for pixiv novels.
+
+Features: search/view novels, view rankings, search age-restricted contents (with `cookies.txt`), autosave, generates simple html, no javascript, written in python, no 3rd party dependency, also works on android+termux.
 
 ### Usage
 ``` sh
-curl 'https://raw.githubusercontent.com/sj2tpgk/pixiv-novel/main/pixiv-novel.py' > pixiv-novel.py
+wget 'https://raw.githubusercontent.com/sj2tpgk/pixiv-novel/main/pixiv-novel.py'
 python pixiv-novel.py
-# Automatically opens daily ranking in browser
+# Automatically opens daily ranking in browser (localhost:8080 by default)
 ```
 
 ### Screenshots
