@@ -36,3 +36,9 @@ To search age-restricted contents, put `cookies.txt` in current directory:
 @RUN ./pixiv-novel.py -h
 ```
 
+### Character name colorizer
+This script has a feature to colorize each character name with different colors in SS-style novels (e.g. "太郎" in "太郎「こんにちは」").
+
+It needs a database of character names & colors.
+See the source code for database definitions.
+

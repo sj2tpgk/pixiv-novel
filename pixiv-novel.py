@@ -573,7 +573,7 @@ class CharaColor:
     _db0 = { # _db0[series][characterName] = color (format: "#xxxxxx" or "#xxx")
             # Idolmaster (https://imas-db.jp/misc/color.html) (imcomplete, and not very strict)
             "アイドルマスターミリオンライブ": {
-                "P": "#555555",
+                "P": "#555555", "Ｐ": "#555555",
                 "天海 春香": "#e22b30", "如月 千早": "#2743d2", "萩原 雪歩": "#d3dde9", "高槻 やよい": "#f39939", "秋月 律子": "#01a860", "三浦 あずさ": "#9238be", "水瀬 伊織": "#fd99e1", "菊地 真": "#515558", "双海 亜美": "#ffe43f", "双海 真美": "#ffe43f", "星井 美希": "#b4e04b", "我那覇 響": "#01adb9", "四条 貴音": "#a6126a", "音無 小鳥": "#00ff00",
                 "伊吹 翼": "#fed552", " エミリー": "#554171", "大神 環": "#ee762e", "春日 未来": "#ea5b76", "北上 麗花": "#6bb6b0", "北沢 志保": "#afa690", "木下 ひなた": "#d1342c", "高坂 海美": "#e9739b", "桜守 歌織": "#274079", "佐竹 美奈子": "#58a6dc", "篠宮 可憐": "#b63b40", "島原 エレナ": "#9bce92", " ジュリア": "#d7385f", "白石 紬": "#ebe1ff", "周防 桃子": "#efb864", "高山 紗代子": "#7f6575", "田中 琴葉": "#92cfbb", "天空橋 朋花": "#bee3e3", "徳川 まつり": "#5abfb7", "所 恵美": "#454341", "豊川 風花": "#7278a8", "中谷 育": "#f7e78e", "永吉 昴": "#aeb49c", "七尾 百合子": "#c7b83c", "二階堂 千鶴": "#f19557", "野々原 茜": "#eb613f", "箱崎 星梨花": "#ed90ba", "馬場 このみ": "#f1becb", "福田 のり子": "#eceb70", "舞浜 歩": "#e25a9b", "真壁 瑞希": "#99b7dc", "松田 亜利沙": "#b54461", "宮尾 美也": "#d7a96b", "最上 静香": "#6495cf", "望月 杏奈": "#7e6ca8", "百瀬 莉緒": "#f19591", "矢吹 可奈": "#f5ad3b", "横山 奈緒": "#788bc5", " ロコ": "#fff03c",
                 "青羽 美咲": "#57c7c4",
@@ -581,12 +581,12 @@ class CharaColor:
                 "日高 愛": "#e85786", "水谷 絵理": "#00adb9", "秋月 涼": "#b2d468",
                 },
             "アイドルマスターシンデレラガールズ": {
-                "P": "#555555",
+                "P": "#555555", "Ｐ": "#555555",
                 " アナスタシア": "#b1c9e8", "及川 雫": "#f4f9ff", "大槻 唯": "#f6be00", "乙倉 悠貴": "#e3bec3", "喜多見 柚": "#f0ec74", "桐生 つかさ": "#ab4ec6", "小日向 美穂": "#db3fb1", "高森 藍子": "#ceea80", "道明寺 歌鈴": "#d22730", " ナターリア": "#f5633a", "難波 笑美": "#e13c30", "浜口 あやめ": "#450099", "姫川 友紀": "#ee8b00", "藤原 肇": "#9595d2", "星輝 子": "#a6093d", "本田 未央": "#feb81c", "三船 美優": "#12bfb2", "三村 かな子": "#feb1bb", "夢見 りあむ": "#e59bdc",
                 "相葉 夕美": "#f1e991", "赤城 みりあ": "#ffcd00", "浅利 七海": "#009cbc", "安部 菜々": "#ef4b81", "荒木 比奈": "#a0d884", "一ノ瀬 志希": "#a50050", "緒方 智絵里": "#6cc24a", "片桐 早苗": "#dc4404", "上条 春菜": "#5ac2e7", "神谷 奈緒": "#9678d3", "川島 瑞樹": "#485cc7", "神崎 蘭子": "#84329b", "喜多 日菜子": "#fcd757", "木村 夏樹": "#2d2926", "黒埼 ちとせ": "#ef3340", "小関 麗奈": "#9b26b6", "小早川 紗枝": "#e56db1", "西園寺 琴歌": "#e8cdd0", "鷺沢 文香": "#606eb2", "佐久間 まゆ": "#da1984", "佐々木 千枝": "#0072ce", "佐城 雪美": "#171c8f", "椎名 法子": "#f8485e", "塩見 周子": "#dce6ed", "渋谷 凛": "#0f9dde", "島村 卯月": "#f67499", "城ヶ崎 美嘉": "#fe9d1a", "城ヶ崎 莉嘉": "#fedd00", "白菊 ほたる": "#c964cf", "白坂 小梅": "#abcae9", "白雪 千夜": "#efd7e5", "砂塚 あきら": "#7e93a7", "関 裕美": "#ffb3ab", "高垣 楓": "#47d7ac", "鷹富士 茄子": "#5c068c", "多田 李衣菜": "#0177c8", "橘あ りす": "#5c88da", "辻野 あかり": "#e10600", "南条 光": "#e4012b", "新田 美波": "#71c5e8", "二宮 飛鳥": "#60249f", "早坂 美玲": "#c701a0", "速水 奏": "#033087", "久川 凪": "#f8a3bc", "久川 颯": "#7eddd3", "日野 茜": "#fa423a", "藤本 里奈": "#623b2a", "双葉 杏": "#f8a3bc", "北条 加蓮": "#2ad2c9", "堀 裕子": "#eca154", "前川 みく": "#ce0037", "松永 涼": "#221651", "的場 梨沙": "#e01a95", "宮本 フレデリカ": "#a20067", "向井 拓海": "#b0008e", "棟方 愛海": "#c7579a", "村上 巴": "#a5192e", "森久保 乃々": "#9cdbd9", "諸星 きらり": "#ffd100", "八神 マキノ": "#a6a4e0", "大和 亜季": "#28724f", "結城 晴": "#71dad4", "遊佐 こずえ": "#f4a6d7", "依田 芳乃": "#c4bcb7", "龍崎 薫": "#fae053", "脇山 珠美": "#407ec8",
                 },
             "アイドルマスターシャイニーカラーズ": {
-                "P": "#555555",
+                "P": "#555555", "Ｐ": "#555555",
                 "櫻木 真乃": "#ffbad6", "風野 灯織": "#144384", "八宮 めぐる": "#ffe012",
                 "月岡 恋鐘": "#f84cad", "田中 摩美々": "#a846fb", "白瀬 咲耶": "#006047", "三峰 結華": "#3b91c4", "幽谷 霧子": "#d9f2ff",
                 "小宮 果穂": "#e5461c", "園田 智代子": "#f93b90", "西城 樹里": "#ffc602", "杜野 凛世": "#89c3eb", "有栖川 夏葉": "#90e667",
@@ -618,17 +618,18 @@ class CharaColor:
 
         # regex: 1 = line beginning, 2 = name, 3 = open paren etc.
         #         (1   )(2  )(3                   )
-        regex = r"(^\s*)(.*?)([^\S\r\n]|[(（「『｢])"
+        regex = r"(^\s*)(.*?)([^\S\r\n]*[(（「『｢])"
 
         # Find what series is this html (different serieses may have same name charas with different colors)
-        # list of characters in html
-        charas = set([x[1] for x in re.findall(regex, html, flags=re.MULTILINE)])
-        # get series with most matching names in charas
-        series = max(self._db.keys(), key = lambda series: len(charas.intersection(self._db[series].keys())))
+        # list of characters found in html (with multiplicity, excluding bad patterns)
+        def isCharaName(s): return len(s) > 0 and (not s.startswith("―"))
+        charaList = [x[1] for x in re.findall(regex, html, flags=re.MULTILINE) if isCharaName(x[1])]
+        # get series with most matching names in charaList
+        series = max(self._db.keys(), key = lambda series: len([s for s in charaList if s in self._db[series].keys()]))
 
-        # If at most 1/2 of charas will get colored, it's likely that series is incorrect
+        # If at most 1/2 of charaList will get colored, it's likely that series is incorrect
         # We don't have a db for the correct series
-        if 0.5 * len(charas) > len(charas.intersection(self._db[series].keys())):
+        if 0.5 * len(charaList) > len([s for s in charaList if s in self._db[series].keys()]):
             return html
 
         # Wrap with <span>
@@ -638,7 +639,7 @@ class CharaColor:
             return f"<span class='name name_{nosp(name)}'>{name}</span>"
 
         # CSS
-        style = "<style>\n.name { font-weight: bold }\n" + "\n".join([".name_%s { color: %s; }" % (nosp(name), color) for (name, color) in self._db[series].items() if name in charas]) + "\n</style>\n"
+        style = "<style>\n.name { font-weight: bold }\n" + "\n".join([".name_%s { color: %s; }" % (nosp(name), color) for (name, color) in self._db[series].items() if name in charaList]) + "\n</style>\n"
 
         # HTML (modified)
         html = re.sub(regex, lambda m: m.group(1) + decorHTML(m.group(2)) + m.group(3), html, flags=re.MULTILINE)
