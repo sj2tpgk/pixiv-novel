@@ -153,7 +153,7 @@ class Search():
                 ]
 
     def _getDataList(self):
-        self._wordEscaped = urllib.parse.quote_plus(self._query, encoding="utf-8").replace("+", "%20")
+        self._wordEscaped = percentEncode(self._query).replace("+", "%20")
         dataList = []
         for i in range(self._npages):
             url1 = f"{self._wordEscaped}?word={self._wordEscaped}&order=date_d&mode=all&p={i+self._page}&s_mode=s_tag&lang=ja"
@@ -180,7 +180,7 @@ td:nth-child(4)       { padding-left: 2em }"""
                 novels += f"<tr><td><a href=\"{href}\">{x['id']}</a></td><td>{getRSign(x['xRestrict'])}</td><td>{x['bookmarkCount']}</td><td>{x['title']}</td></tr>\n"
             else:
                 desc = "<br>".join(replaceLinks(x["description"]).split("<br />")[0:5])
-                tags = ", ".join([f"<a href=\"/?cmd=search&q={t}\">{t}</a>" for t in x["tags"]])
+                tags = ", ".join([f"<a href=\"/?cmd=search&q={percentEncode(t)}\">{t}</a>" for t in x["tags"]])
                 novels += f"<li>{x['title']} ({x['textCount']}字) <a href=\"{href}\">[{x['id']}]</a><p>{desc}</p>{emoji['love']} {x['bookmarkCount']}<br>{tags}</li><hr>\n"
         novels += "</table>" if compact else "</ul>"
 
@@ -491,7 +491,7 @@ class Fetch():
                 ]:
             o_json = o_json.replace(fromStr, toStr)
 
-        o_tags = ",\n".join(map(lambda y: f"<a href='/?cmd=search&q={y}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
+        o_tags = ",\n".join(map(lambda y: f"<a href='/?cmd=search&q={percentEncode(y)}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
         o_info = f"""<p>
 タグ:
 {o_tags}
@@ -687,6 +687,9 @@ def replaceLinks(desc): # replace novel/xxxxx links and user/xxxxx links
 
 def getRSign(xRestrict):
     return ["", "R ", "G "][int(xRestrict)]
+
+def percentEncode(word):
+    return urllib.parse.quote_plus(word, encoding="utf-8")
 
 def readCookiestxtAsCookieHeader():
     # Read Netscape HTTP Cookie File and return string for urllib request header
