@@ -673,9 +673,18 @@ def myRequest(url, toJson=False):
     if cookie:
         headers["Cookie"] = cookie
 
-    req = urllib.request.Request(url, headers=headers)
-    out = urllib.request.urlopen(req).read().decode("utf-8")
-    return json.loads(out) if toJson else out
+    import urllib.error
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        out = urllib.request.urlopen(req).read().decode("utf-8")
+        return json.loads(out) if toJson else out
+    except urllib.error.HTTPError as e:
+        print("Error when downloading from Pixiv, possibly cookies.txt is outdated.")
+        print("HTTPError: ", e)
+    except urllib.error.URLError as e:
+        print("URLError: ", e)
+    except Exception as e:
+        print(e)
 
 def replaceLinks(desc): # replace novel/xxxxx links and user/xxxxx links
     for (regex, rep) in [

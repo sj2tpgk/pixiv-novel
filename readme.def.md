@@ -29,6 +29,8 @@ To search age-restricted contents, put `cookies.txt` in current directory:
     $ python pixiv-novel.py
     ```
 
+When `HTTP Error 302` happens, try re-exporting your `cookies.txt`.
+
 <!-- or use document.cookie in devtool -->
 
 ### Options
