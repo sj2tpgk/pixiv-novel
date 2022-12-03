@@ -180,6 +180,7 @@ td:nth-child(4)       { padding-left: 2em }"""
                 novels += f"<tr><td><a href=\"{href}\">{x['id']}</a></td><td>{getRSign(x['xRestrict'])}</td><td>{x['bookmarkCount']}</td><td>{x['title']}</td></tr>\n"
             else:
                 desc = "<br>".join(replaceLinks(x["description"]).split("<br />")[0:5])
+                desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
                 tags = ", ".join([f"<a href=\"/?cmd=search&q={percentEncode(t)}\">{t}</a>" for t in x["tags"]])
                 novels += f"<li>{x['title']} ({x['textCount']}字) <a href=\"{href}\">[{x['id']}]</a><p>{desc}</p>{emoji['love']} {x['bookmarkCount']}<br>{tags}</li><hr>\n"
         novels += "</table>" if compact else "</ul>"
@@ -699,6 +700,29 @@ def getRSign(xRestrict):
 
 def percentEncode(word):
     return urllib.parse.quote_plus(word, encoding="utf-8")
+
+def addMissingCloseTags(html, tags=["b", "s", "u", "strong"]):
+
+    # "aaa<b"  ==>  "aaa"
+    m = re.search("<[^>]*$", html)
+    if m:
+        html = html[:m.start(0)]
+
+    # Count opened counts for each tag in `tags`
+    counts = {}
+    for m in re.finditer(r"<\s*(/?)\s*(" + "|".join(tags) + r")\s*>", html):
+        t = m.group(2)
+        if m.group(1) == "/":
+            counts[t] = (counts[t] - 1) if t in counts else -1
+        else:
+            counts[t] = (counts[t] + 1) if t in counts else 1
+
+    # For each tag, if opened count > closed count then add close tags
+    for t in counts:
+        if counts[t] > 0:
+            html += ("</" + t + ">") * counts[t]
+
+    return html
 
 def readCookiestxtAsCookieHeader():
     # Read Netscape HTTP Cookie File and return string for urllib request header
