@@ -2,7 +2,7 @@
 
 Lightweight frontend for pixiv novels.
 
-Features: search/view novels, view rankings, search age-restricted contents (with `cookies.txt`), autosave, generates simple html, no javascript, written in python, no 3rd party dependency, also works on android+termux.
+Features: search/view novels, view rankings, access age-restricted contents with `cookies.txt`, autosave, generates simple html, no javascript, written in python, no 3rd party dependency, also works on android+termux.
 
 ### Usage
 ``` sh
@@ -17,7 +17,7 @@ python pixiv-novel.py
 <img width="450" src="images/novel.png">
 
 ### Cookies
-To search age-restricted contents, put `cookies.txt` in current directory:
+To search/view age-restricted contents, put `cookies.txt` in current directory:
 1. Login to pixiv.
 2. Export `cookies.txt` using this [Chrome addon](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid) or [Firefox addon](https://addons.mozilla.org/ja/firefox/addon/cookies-txt/).
 3. Check `cookies.txt` is in the current directory and run script:
@@ -29,7 +29,7 @@ To search age-restricted contents, put `cookies.txt` in current directory:
     $ python pixiv-novel.py
     ```
 
-When `HTTP Error 302` happens, try re-exporting your `cookies.txt`.
+When `HTTP Error` happens, try re-exporting your `cookies.txt`.
 
 <!-- or use document.cookie in devtool -->
 

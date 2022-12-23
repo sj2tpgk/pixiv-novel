@@ -5,14 +5,15 @@ from html.parser import HTMLParser
 import argparse
 import colorsys
 import datetime
+import gzip
 import json
 import os
 import random
 import re
 import shutil
 import subprocess
-import urllib.parse
-import urllib.request
+import time
+import urllib.error, urllib.parse, urllib.request
 import webbrowser
 
 # base
@@ -29,11 +30,8 @@ import webbrowser
 
 ### Configuration
 
-cookie = None  # Cookie string
 save   = False # Save visited novels?
 color  = False # colorize character names?
-
-def hasCookie(): return bool(cookie)
 
 emoji = { "love": "💙", "search": "🔍" }
 
@@ -156,9 +154,7 @@ class Search():
         self._wordEscaped = percentEncode(self._query).replace("+", "%20")
         dataList = []
         for i in range(self._npages):
-            url1 = f"{self._wordEscaped}?word={self._wordEscaped}&order=date_d&mode=all&p={i+self._page}&s_mode=s_tag&lang=ja"
-            url = f"https://www.pixiv.net/ajax/search/novels/{url1}"
-            resJson = myRequest(url, toJson=True)
+            resJson = Download.Pixiv.jsonSearch(self._query, i+self._page)
             dataList += resJson["body"]["novel"]["data"]
         return dataList
 
@@ -247,17 +243,14 @@ class SearchUser(Search):
         dataList = []
 
         # First, response includes all novelIDs of user
-        url1 = f"https://www.pixiv.net/ajax/user/{self._userID}/profile/all?lang=ja"
-        json1 = myRequest(url1, toJson=True)
+        json1 = Download.Pixiv.jsonUserAll(self._userID)
         novelIDs = list(json1["body"]["novels"].keys())
 
         # Next, get data for each novel (100 novels at once)
         dataList = []
         n = 100
         for ids in [novelIDs[n*i:n*(i+1)] for i in range(1+int(len(novelIDs)/n))]:
-            idsParams = "&".join([f"ids[]={x}" for x in ids])
-            url2 = f"https://www.pixiv.net/ajax/user/{self._userID}/profile/novels?{idsParams}"
-            json2 = myRequest(url2, toJson=True)
+            json2 = Download.Pixiv.jsonUserNovels(self._userID, ids)
             dataList += list(json2["body"]["works"].values())
 
         return dataList
@@ -317,7 +310,7 @@ class SearchRanking(Search):
         # return self._getDataListFromHTML("".join(open("../r_daily","r").readlines()))
         dataList = []
         for page in [1, 2]:
-            res = myRequest(url + ("&page=2" if page == 2 else ""))
+            res = Download.Pixiv.rankingPhp(self._mode, self._date.isoformat(), page)
             dataList += self._getDataListFromHTML(res)
         return dataList
 
@@ -361,7 +354,7 @@ class SearchRanking(Search):
         # links for other rankings
         hrefBase = f"/?cmd=ranking{'&compact=1' if compact else ''}&date={self._date}"
         modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
-        if hasCookie():
+        if Download.Pixiv.hasCookie():
             modeLinks2 = "<span>R-18:</span>"
             modeLinks2 += "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode].replace(" R-18", "")}</a>""" for mode in self._modeNames.keys() if "r18" in mode])
         else:
@@ -436,8 +429,7 @@ class Fetch():
         self._html = None
 
     def _getData(self):
-        url = "https://www.pixiv.net/novel/show.php?id=%s" % self._novelID
-        html = myRequest(url)
+        html = Download.Pixiv.showPhp(self._novelID)
         return self._extractData(html)
 
     def html(self):
@@ -445,7 +437,7 @@ class Fetch():
 
         ## Construct html
 
-        data = self._getData()
+        data = self._data
 
         o_css = """body { max-width: 700px; margin: 1em auto; padding: 0 .5em; }
 @media screen and (max-aspect-ratio: .75) and (max-width: 13cm) { /* Mobile */
@@ -565,6 +557,87 @@ D:{data["createDate"][:10]}
         return json1["novel"][list(json1["novel"].keys())[0]]
 
 
+### Download
+
+class Download:
+
+    # Resource downloading often breaks due to invalidated cookie, change in http request headers etc.
+    # So we want unit-testable functions for each resource.
+
+    class Pixiv:
+
+        # 404 without headers
+        _headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache'
+                }
+
+        # cookie = readCookiestxtAsHTTPCookieHeader("../cookies.txt", "pixiv.net")
+        cookie = None
+
+        @classmethod
+        def hasCookie(cls):
+            return bool(cls.cookie)
+
+        @classmethod
+        def cookieHeader(cls):
+            return { "cookie": cls.cookie } if cls.hasCookie() else {}
+
+        @classmethod
+        def showPhp(cls, novelID):
+            url = f"https://www.pixiv.net/novel/show.php?id={novelID}"
+            return myRequest(url, headers=cls._headers, headers2=cls.cookieHeader())
+
+        @classmethod
+        def rankingPhp(cls, mode, date: str, page: int):
+            # Check modes
+            MODES = { "daily", "weekly", "monthly", "rookie", "weekly_original", "male", "female", "daily_r18", "weekly_r18", "male_r18", "female_r18", }
+            if not mode in MODES:
+                raise Exception(f"Download.Pixiv.rankingPhp: unknown mode {mode} (expected one of [ {', '.join(MODES)} ]")
+            if (not cls.hasCookie()) and mode.endswith("r18"):
+                raise Exception(f"Download.Pixiv.rankingPhp: cookie is needed to view ranking of mode {mode}")
+            # Check date
+            if not (isinstance(date, str) and re.match(r"\d\d\d\d-\d\d-\d\d", date)):
+                raise Exception(f"Download.Pixiv.rankingPhp: invalid date {date} (should be YYYY-MM-DD as a str)")
+            # Make URL
+            url = f"https://www.pixiv.net/novel/ranking.php?mode={mode}&date={date.replace('-', '')}"
+            if page > 1:
+                url += f"&page={page}"
+            # Download
+            return myRequest(url, headers=cls._headers, headers2=(cls.cookieHeader() if mode.endswith("r18") else {}))
+
+        @classmethod
+        def jsonUserAll(cls, userID):
+            url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?lang=ja"
+            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+
+        @classmethod
+        def jsonUserNovels(cls, userID, novelIDs):
+            n = 100
+            if len(novelIDs) > n:
+                raise Exception(f"Download.Pixiv.apiUserIds: at most {n} novel IDs are allowed to query at once; got {len(novelIDs)}")
+            idsParams = "&".join([f"ids[]={x}" for x in novelIDs])
+            url = f"https://www.pixiv.net/ajax/user/{userID}/profile/novels?{idsParams}"
+            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+
+        @classmethod
+        def jsonSearch(cls, word, page):
+            wordEscaped = percentEncode(word).replace("+", "%20")
+            params = f"?word={wordEscaped}&order=date_d&mode=all&p={page}&s_mode=s_tag&lang=ja"
+            url = f"https://www.pixiv.net/ajax/search/novels/{wordEscaped}{params}"
+            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+
+
 ### Character name colorizer
 
 class CharaColor:
@@ -650,42 +723,49 @@ class CharaColor:
 
 ### Misc mini functions
 
-def myRequest(url, toJson=False):
+def myRequest(url, headers={}, headers2={}, toJson=False):
+    # Please add functions in Download class and call myRequest() from there.
+
+    # Prevent sending same request many times in a short period
+    if not hasattr(myRequest, "_lastTime"): myRequest._lastTime = 0
+    if not hasattr(myRequest, "_lastUrl"):  myRequest._lastUrl  = None
+    now = time.time() * 1000
+    tooFast = (url == myRequest._lastUrl and now - myRequest._lastTime < 500)
+    myRequest._lastTime, myRequest._lastUrl = now, url
+    if tooFast:
+        raise Exception(f"myRequest: requests to the same url in a short period: {url}")
+
     # %-encode non-ascii chars
     regex = r'[^\x00-\x7F]'
     for m in re.findall(regex, url):
         url = url.replace(m, urllib.parse.quote_plus(m, encoding="utf-8"))
 
-    headers = { # 404 without these
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100",
-            "Host": "www.pixiv.net",
-            "Accept": "application/json",
-            "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
-            "Referer": "https://www.pixiv.net/",
-            "x-user-id": str(random.randrange(0, 100000000)),
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "TE": "trailers",
-            }
+    # Combine headers and headers2
+    headersAll = { **headers, **headers2 } if headers2 else headers # same property from headers2 will survive
 
-    global cookie
-    if cookie:
-        headers["Cookie"] = cookie
+    # Create request
+    req = urllib.request.Request(url, headers=headersAll)
 
-    import urllib.error
+    # Actually send request and catch error
     try:
-        req = urllib.request.Request(url, headers=headers)
-        out = urllib.request.urlopen(req).read().decode("utf-8")
-        return json.loads(out) if toJson else out
+        res = urllib.request.urlopen(req)
     except urllib.error.HTTPError as e:
-        print("Error when downloading from Pixiv, possibly cookies.txt is outdated.")
-        print("HTTPError: ", e)
+        print("myRequest: HTTPError (update cookie or review request headers)")
+        raise e
+        # Error when downloading from Pixiv, possibly cookies.txt is outdated, or review http request headers.
     except urllib.error.URLError as e:
-        print("URLError: ", e)
+        raise e
     except Exception as e:
-        print(e)
+        raise e
+
+    # decompress, decode, and optionally parse json (and html?)
+    compfmt = "Content-Encoding" in res.headers and res.headers["Content-Encoding"]
+    data = res.read()
+    data = gzip.decompress(data) if compfmt == "gzip" else data # TODO deflate and bzip?
+    data = data.decode("utf-8")
+    if toJson:
+        data = json.loads(data)
+    return data
 
 def replaceLinks(desc): # replace novel/xxxxx links and user/xxxxx links
     for (regex, rep) in [
@@ -724,11 +804,10 @@ def addMissingCloseTags(html, tags=["b", "s", "u", "strong"]):
 
     return html
 
-def readCookiestxtAsCookieHeader():
+def readCookiestxtAsHTTPCookieHeader(cookiestxt, domain):
     # Read Netscape HTTP Cookie File and return string for urllib request header
     #   urllib.request.Request(url, headers={"Cookie": ...})
-
-    cookiestxt = "cookies.txt"
+    # Only matching domains will be extracted (if domain=="a.com" then www.a.com, .a.com etc will match)
 
     try:
         with open(cookiestxt) as f:
@@ -739,8 +818,8 @@ def readCookiestxtAsCookieHeader():
                 if re.match(r"^\s*$", line) or re.match(r"^# ", line):
                     continue
                 fields = line[:-1].split('\t')
-                # Each line must have 7 fields and domain name must be pixiv related
-                if len(fields) == 7 and fields[0].find("pixiv.net") != -1:
+                # Each line must have 7 fields and has the specified
+                if len(fields) == 7 and (not domain or fields[0].find(domain) != -1):
                     results += [ f"{fields[5]}={fields[6]}" ]
 
             # Output will be like "name=val; name=val"
@@ -796,7 +875,7 @@ if __name__ == "__main__":
 
     # Try read cookies.txt
     # To obtain cookies.txt, use https://addons.mozilla.org/ja/firefox/addon/cookies-txt/ or https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid or type document.cookie in devtool
-    cookie = readCookiestxtAsCookieHeader()
+    Download.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader("cookies.txt", "pixiv.net")
 
     # Run server
     hostName = "0.0.0.0" # Also accessible from other computers
