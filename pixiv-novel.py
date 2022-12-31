@@ -3,6 +3,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from html.parser import HTMLParser
 import argparse
+import base64
 import colorsys
 import datetime
 import gzip
@@ -459,17 +460,28 @@ class Fetch():
             o_content = re.sub(regex, replace, o_content, flags=re.MULTILINE)
 
         # uploadedimage
-        def getImageTag(novelImageId):
+        def getUploadedImageTag(novelImageId):
             url = data["textEmbeddedImages"][novelImageId]["urls"]["original"]
+            imgB64 = base64.b64encode(Download.Pixiv.uploadedImage(url)).decode("utf-8")
             return f"""<figure>
 <a href="{url}">
-<img src=\"{url}\" alt=\"[uploadedimage:{novelImageId}\" style=\"width: 100%\">
+<img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}\" style=\"width: 100%\">
 </a>
 </figure>"""
-        o_content = re.sub(r"\[uploadedimage:([0-9]*)(.*?)\]", lambda m: getImageTag(m.group(1)), o_content)
+        o_content = re.sub(r"\[uploadedimage:([0-9]*)(.*?)\]", lambda m: getUploadedImageTag(m.group(1)), o_content)
 
-        # pixivimage (not simple to retrieve images)
-        o_content = re.sub(r"\[pixivimage:([0-9]*)(.*?)\]", "<a href=\"https://www.pixiv.net/artworks/\\1\">画像 \\1\\2</a>", o_content)
+        # pixivimage (may need cookie to retrieve images)
+        def getArtworkImageTag(imageId, subIndex):
+            url      = f"https://www.pixiv.net/artworks/{imageId}"
+            json1    = Download.Pixiv.artworkPagesJson(imageId)
+            imageUrl = json1["body"][int(subIndex or 1)-1]["urls"]["original"]
+            imgB64   = base64.b64encode(Download.Pixiv.artworkImage(imageUrl)).decode("utf-8")
+            return f"""<figure>
+<a href="{url}">
+<img src=\"data:image/png;base64,{imgB64}\" alt=\"[pixivimage:{imageId}-{subIndex}\" style=\"width: 100%\">
+</a>
+</figure>"""
+        o_content = re.sub(r"\[pixivimage:([0-9]*)(-([0-9]*))?\]", lambda m: getArtworkImageTag(m.group(1), m.group(3)), o_content)
 
         # colorize character names
         if color:
@@ -579,6 +591,7 @@ class Download:
                 'Sec-Fetch-Site': 'none',
                 'Sec-Fetch-User': '?1',
                 'Pragma': 'no-cache',
+                'Referer': 'https://www.pixiv.net/',
                 'Cache-Control': 'no-cache'
                 }
 
@@ -619,7 +632,7 @@ class Download:
         @classmethod
         def jsonUserAll(cls, userID):
             url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?lang=ja"
-            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
 
         @classmethod
         def jsonUserNovels(cls, userID, novelIDs):
@@ -628,14 +641,37 @@ class Download:
                 raise Exception(f"Download.Pixiv.apiUserIds: at most {n} novel IDs are allowed to query at once; got {len(novelIDs)}")
             idsParams = "&".join([f"ids[]={x}" for x in novelIDs])
             url = f"https://www.pixiv.net/ajax/user/{userID}/profile/novels?{idsParams}"
-            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
 
         @classmethod
         def jsonSearch(cls, word, page):
             wordEscaped = percentEncode(word).replace("+", "%20")
             params = f"?word={wordEscaped}&order=date_d&mode=all&p={page}&s_mode=s_tag&lang=ja"
             url = f"https://www.pixiv.net/ajax/search/novels/{wordEscaped}{params}"
-            return myRequest(url, toJson=True, headers=cls._headers, headers2={ "cookie": cls.cookie })
+            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
+
+        @classmethod
+        def artworkPagesJson(cls, id):
+            url = f"https://www.pixiv.net/ajax/illust/{id}/pages?lang=ja"
+            try:
+                return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader(), headers3={ "Accept": "application/json" })
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    print("Download.Pixiv.artworkPagesJson: Artwork not found" + (", or cookie is required to view this artwork" if not cls.hasCookie() else "") + ":", e)
+                else:
+                    print("Download.Pixiv.artworkPagesJson: Unknown error:", e)
+                raise e
+
+        @classmethod
+        def artworkImage(cls, url):
+            headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
+            return myRequest(url, fmt="raw", headers=cls._headers, headers2=headers2)
+
+        @classmethod
+        def uploadedImage(cls, url):
+            headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
+            return myRequest(url, fmt="raw", headers=cls._headers)
+
 
 
 ### Character name colorizer
@@ -723,7 +759,7 @@ class CharaColor:
 
 ### Misc mini functions
 
-def myRequest(url, headers={}, headers2={}, toJson=False):
+def myRequest(url, headers={}, headers2={}, headers3={}, fmt=None):
     # Please add functions in Download class and call myRequest() from there.
 
     # Prevent sending same request many times in a short period
@@ -735,13 +771,17 @@ def myRequest(url, headers={}, headers2={}, toJson=False):
     if tooFast:
         raise Exception(f"myRequest: requests to the same url in a short period: {url}")
 
+    # Check fmt argument
+    if fmt and (not fmt in ["json", "raw", "string"]):
+        raise Exception(f"myRequest: invalid fmt specified: {fmt} (expected one of 'json', 'raw', 'string' or None")
+
     # %-encode non-ascii chars
     regex = r'[^\x00-\x7F]'
     for m in re.findall(regex, url):
         url = url.replace(m, urllib.parse.quote_plus(m, encoding="utf-8"))
 
     # Combine headers and headers2
-    headersAll = { **headers, **headers2 } if headers2 else headers # same property from headers2 will survive
+    headersAll = { **headers, **headers2, **headers3 } # same property from headers3, then headers2 will survive
 
     # Create request
     req = urllib.request.Request(url, headers=headersAll)
@@ -750,7 +790,7 @@ def myRequest(url, headers={}, headers2={}, toJson=False):
     try:
         res = urllib.request.urlopen(req)
     except urllib.error.HTTPError as e:
-        print("myRequest: HTTPError (update cookie or review request headers)")
+        print("myRequest: HTTPError (update cookie or review request headers)", e.code, e.reason)
         raise e
         # Error when downloading from Pixiv, possibly cookies.txt is outdated, or review http request headers.
     except urllib.error.URLError as e:
@@ -762,10 +802,14 @@ def myRequest(url, headers={}, headers2={}, toJson=False):
     compfmt = "Content-Encoding" in res.headers and res.headers["Content-Encoding"]
     data = res.read()
     data = gzip.decompress(data) if compfmt == "gzip" else data # TODO deflate and bzip?
+    if fmt == "raw":
+        return data
+
     data = data.decode("utf-8")
-    if toJson:
-        data = json.loads(data)
-    return data
+    if fmt == "json":
+        return json.loads(data)
+    else:
+        return data
 
 def replaceLinks(desc): # replace novel/xxxxx links and user/xxxxx links
     for (regex, rep) in [
@@ -839,6 +883,12 @@ def yesterday():
     return datetime.date.today() - datetime.timedelta(days = 1)
 
 
+### test
+
+def test():
+    return
+
+
 ### Main
 
 if __name__ == "__main__":
@@ -850,10 +900,11 @@ if __name__ == "__main__":
     parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
     parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
     parser.add_argument("-p", "--port", type=int, default=8080, help="Port number. (default: 8080)")
+    parser.add_argument("--test", action="store_true")
     # parser.add_argument("-R", "--nor18", action="store_true", help="Disable R18.")
+    args = parser.parse_args()
 
     # Save some options on global
-    args = parser.parse_args()
     save = args.autosave
     color = not args.nocolor
 
@@ -876,6 +927,11 @@ if __name__ == "__main__":
     # Try read cookies.txt
     # To obtain cookies.txt, use https://addons.mozilla.org/ja/firefox/addon/cookies-txt/ or https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid or type document.cookie in devtool
     Download.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader("cookies.txt", "pixiv.net")
+
+    # Test code
+    if args.test:
+        test()
+        quit()
 
     # Run server
     hostName = "0.0.0.0" # Also accessible from other computers
