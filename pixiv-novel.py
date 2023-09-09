@@ -248,9 +248,11 @@ class SearchUser(Search):
         novelIDs = list(json1["body"]["novels"].keys())
 
         # Next, get data for each novel (100 novels at once)
+        # So, 0 novel = 0 request, 1-100 novels = 1 request, 101-200 = 2 etc.
         dataList = []
         n = 100
-        for ids in [novelIDs[n*i:n*(i+1)] for i in range(1+int(len(novelIDs)/n))]:
+        numRequests = 1 + int((len(novelIDs)-1)/n)
+        for ids in [novelIDs[n*i:n*(i+1)] for i in range(numRequests)]:
             json2 = Download.Pixiv.jsonUserNovels(self._userID, ids)
             dataList += list(json2["body"]["works"].values())
 
@@ -548,7 +550,7 @@ D:{data["createDate"][:10]}
             while len(s[:i].encode("utf-8")) + lenSuffixU > lenBytes:
                 i -= 1
             return s[:i] + suffix
-        title = self._data["title"].replace("/", " ")
+        title = self._data["title"].replace("/", " ").replace('"', " ")
         outPrefix = f"{getRSign(self._data['xRestrict'])}"
         outSuffix = f" - pixiv - {self._data['id']}.html"
         outfile = trunc(outPrefix + title, os.pathconf('/', 'PC_NAME_MAX'), outSuffix)
@@ -637,6 +639,8 @@ class Download:
         @classmethod
         def jsonUserNovels(cls, userID, novelIDs):
             n = 100
+            if len(novelIDs) <= 0:
+                raise Exception(f"Download.Pixiv.apiUserIds: at least 1 novel IDs are required")
             if len(novelIDs) > n:
                 raise Exception(f"Download.Pixiv.apiUserIds: at most {n} novel IDs are allowed to query at once; got {len(novelIDs)}")
             idsParams = "&".join([f"ids[]={x}" for x in novelIDs])
