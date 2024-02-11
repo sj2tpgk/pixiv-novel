@@ -13,6 +13,7 @@ import random
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error, urllib.parse, urllib.request
 import webbrowser
@@ -31,17 +32,36 @@ import webbrowser
 
 ### Configuration
 
-save   = False # Save visited novels?
-color  = False # colorize character names?
+save    = False # Save visited novels?
+color   = False # colorize character names?
+verbose = False # Show http logs?
 
 emoji = { "love": "💙", "search": "🔍" }
 
 
-### Server
+### HTTP Server
 
-class MyServer(BaseHTTPRequestHandler):
+def run_threaded_https_server(RequestHandlerClass, host="0.0.0.0", port=8030, https=False, certfile="", keyfile=""):
+    """Run http server with threading and ssl support.
+if `https` is true, (`certfile`, `keyfile`) is passed to load_cert_chain.
+Use `openssl req -new -x509 -keyout CERTFILE -out KEYFILE -days 365 -nodes`."""
+    import http.server, ssl
+    def ssl_wrap(httpd, certfile, keyfile):
+        # https://gist.github.com/DannyHinshaw/a3ac5991d66a2fe6d97a569c6cdac534
+        ctx = ssl.SSLContext(protocol=ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    httpd = http.server.ThreadingHTTPServer((host, port), RequestHandlerClass)
+    if https:
+        ssl_wrap(httpd, certfile, keyfile)
+    httpd.serve_forever()
+
+class MyRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        return # supress logs
+        if verbose:
+            dt = datetime.datetime.now().isoformat()[:19].replace("T", " ")
+            cli = self.client_address
+            print(("%s:%s [%s] " + format) % (cli[0], cli[1], dt, *args))
 
     def do_GET(self):
 
@@ -926,6 +946,9 @@ if __name__ == "__main__":
     parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
     parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
     parser.add_argument("-p", "--port", type=int, default=8080, help="Port number. (default: 8080)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
+    parser.add_argument("--sslcert", type=str, help="HTTPS cert file.")
+    parser.add_argument("--sslkey", type=str, help="HTTPS key file.")
     parser.add_argument("--test", action="store_true")
     # parser.add_argument("-R", "--nor18", action="store_true", help="Disable R18.")
     args = parser.parse_args()
@@ -933,6 +956,7 @@ if __name__ == "__main__":
     # Save some options on global
     save = args.autosave
     color = not args.nocolor
+    verbose = args.verbose
 
     # Readme
     # - Check out: cool reader (android app)
@@ -959,21 +983,36 @@ if __name__ == "__main__":
         test()
         quit()
 
+    # Check HTTPS support
+    if args.sslcert and args.sslkey:
+        serverHttps = True
+        serverCert  = args.sslcert
+        serverKey   = args.sslkey
+    elif args.sslcert or args.sslkey:
+        raise Exception("Specify both --sslcert and --sslkey for HTTPS support.")
+    else:
+        serverHttps = serverCert = serverKey = None
+
     # Run server
-    hostName = "0.0.0.0" # Also accessible from other computers
+    serverHost = "0.0.0.0" # Also accessible from other computers
     serverPort = args.port
-    webServer = HTTPServer((hostName, serverPort), MyServer)
-    serverUrl = "http://%s:%s" % (hostName, serverPort)
-    print("Server at %s" % serverUrl)
+
+    serverThread = threading.Thread(
+        None,
+        target=run_threaded_https_server,
+        args=(MyRequestHandler, serverHost, serverPort, serverHttps, serverCert, serverKey),
+        daemon=True)
+    serverThread.start()
+
+    serverUrl = f"http{'s' if serverHttps else ''}://{serverHost}:{serverPort}"
+    print(f"Serving at {serverUrl}")
 
     # Open in browser
     if not args.nobrowser:
         openInBrowser(serverUrl)
 
     try:
-        webServer.serve_forever()
+        serverThread.join()
     except KeyboardInterrupt:
         pass
-
-    webServer.server_close()
 
