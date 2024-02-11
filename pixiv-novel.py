@@ -8,6 +8,7 @@ import colorsys
 import datetime
 import gzip
 import json
+import logging
 import os
 import random
 import re
@@ -58,10 +59,9 @@ Use `openssl req -new -x509 -keyout CERTFILE -out KEYFILE -days 365 -nodes`."""
 
 class MyRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        if verbose:
-            dt = datetime.datetime.now().isoformat()[:19].replace("T", " ")
-            cli = self.client_address
-            print(("%s:%s [%s] " + format) % (cli[0], cli[1], dt, *args))
+        dt = datetime.datetime.now().isoformat()[:19].replace("T", " ")
+        cli = self.client_address
+        logging.debug(("%s:%s " + format) % (cli[0], cli[1], *args))
 
     def do_GET(self):
 
@@ -72,7 +72,7 @@ class MyRequestHandler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(bytes(html, "utf-8"))
             except BrokenPipeError:
-                # print("BrokenPipeError")
+                logging.warning("BrokenPipeError")
                 return
 
         params = urllib.parse.parse_qs(self.path[2:])
@@ -112,8 +112,7 @@ class MyRequestHandler(BaseHTTPRequestHandler):
             try:
                 sendHTML(getHTML())
             except Exception as e:
-                print ("Error occured\n" + str(e))
-                return "Error occured<br>" + str(e)
+                logging.error("Error occured\n" + str(e))
 
 
 ### Search
@@ -428,7 +427,7 @@ class MyHTMLParser(HTMLParser):
                 return v
     def _match(self, query):
         if not re.match(r"^\.[^\s.]*$", query):
-            print("Query must be like .CLASS")
+            logging.error("Query must be like .CLASS")
             return
         return re.sub(r"\.", "", query) in (self._attr("class") or "").split()
     def handle_starttag(self, tag, attrs):
@@ -681,9 +680,9 @@ class Download:
                 return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader(), headers3={ "Accept": "application/json" })
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    print("Download.Pixiv.artworkPagesJson: Artwork not found" + (", or cookie is required to view this artwork" if not cls.hasCookie() else "") + ":", e)
+                    logging.warning("Download.Pixiv.artworkPagesJson: Artwork not found" + (", or cookie is required to view this artwork" if not cls.hasCookie() else "") + ":", e)
                 else:
-                    print("Download.Pixiv.artworkPagesJson: Unknown error:", e)
+                    logging.error("Download.Pixiv.artworkPagesJson: Unknown error:", e)
                 raise e
 
         @classmethod
@@ -836,7 +835,7 @@ def myRequest(url, headers={}, headers2={}, headers3={}, fmt=None):
     try:
         res = urllib.request.urlopen(req)
     except urllib.error.HTTPError as e:
-        print("myRequest: HTTPError (update cookie or review request headers)", e.code, e.reason)
+        logging.error("myRequest: HTTPError (update cookie or review request headers)", e.code, e.reason)
         raise e
         # Error when downloading from Pixiv, possibly cookies.txt is outdated, or review http request headers.
     except urllib.error.URLError as e:
@@ -916,7 +915,7 @@ def readCookiestxtAsHTTPCookieHeader(cookiestxt, domain):
             return "; ".join(results)
 
     except OSError as e:
-        print("Could not read cookies.txt; R-18 search results will be omitted!")
+        logging.warning("Could not read cookies.txt; R-18 search results will be omitted!")
         return False
 
 def openInBrowser(url):
@@ -958,6 +957,8 @@ if __name__ == "__main__":
     color = not args.nocolor
     verbose = args.verbose
 
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if verbose else logging.ERROR)
+
     # Readme
     # - Check out: cool reader (android app)
     # - cookies.txt
@@ -967,11 +968,11 @@ if __name__ == "__main__":
     if args.download:
         novelID = re.match(r"[0-9]*", args.download).group()
         if not novelID:
-            print("Invalid url")
+            logging.error("Invalid url")
         else:
             f = Fetch(novelID)
             outfile = f.save()
-            print(outfile)
+            print("Written to " + outfile, flush=True)
         exit()
 
     # Try read cookies.txt
@@ -1005,7 +1006,7 @@ if __name__ == "__main__":
     serverThread.start()
 
     serverUrl = f"http{'s' if serverHttps else ''}://{serverHost}:{serverPort}"
-    print(f"Serving at {serverUrl}")
+    print(f"Serving at {serverUrl}", flush=True)
 
     # Open in browser
     if not args.nobrowser:
