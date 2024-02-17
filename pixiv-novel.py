@@ -981,7 +981,7 @@ if __name__ == "__main__":
     ## Parse args
     parser = argparse.ArgumentParser(description="Start web server to view pixiv novels. Load cookies.txt if found in current dir.")
     parser.add_argument("-a", "--autosave", action="store_true", help="Enable autosave; save visited novels as files.")
-    parser.add_argument("-B", "--nobrowser", action="store_true", help="Don't open browser.")
+    parser.add_argument("-b", "--browser", action="store_true", help="Open in browser.")
     parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
     parser.add_argument("-c", "--cachedir", type=str, default="_cache", help="Directory to store cache (NONE to disable).")
     parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
@@ -1051,7 +1051,7 @@ if __name__ == "__main__":
     print(f"Serving at {serverUrl}", flush=True)
 
     # Open in browser
-    if not args.nobrowser:
+    if args.browser:
         openInBrowser(serverUrl)
 
     try:
