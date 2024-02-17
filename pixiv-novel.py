@@ -33,9 +33,10 @@ import webbrowser
 
 ### Configuration
 
-save    = False # Save visited novels?
-color   = False # colorize character names?
-verbose = False # Show http logs?
+save     = False  # Save visited novels?
+color    = False  # colorize character names?
+verbose  = False  # Show http logs?
+cachedir = "NONE" # Cache directory (NONE to disable)
 
 emoji = { "love": "💙", "search": "🔍" }
 
@@ -443,6 +444,40 @@ class MyHTMLParser(HTMLParser):
 
 ### Fetch
 
+def withFileCache(name, getDefault, expiry=600):
+    # note: when cache is expired and getDefault fails, returns old cache
+    # expiry is in seconds
+    if cachedir == "NONE":
+        return getDefault()
+    if not re.match(r"^[a-zA-Z0-9-._]*$", name):
+        raise Exception("Invalid cache name", name)
+    if not os.path.isdir(cachedir):
+        os.mkdir(cachedir)
+    file = cachedir + os.sep + name
+    def updateCache():
+        value = getDefault()
+        with open(file, "w") as f:
+            f.write(value)
+        return value
+    def readCache():
+        with open(file, "r") as f:
+            return f.read()
+    try:
+        if datetime.datetime.now().timestamp() - os.stat(file).st_mtime > expiry:
+            try:
+                value = updateCache()
+                logging.debug("cache updating " + name)
+            except:
+                value = readCache()
+                logging.debug("cache failed updating, using old " + name)
+        else:
+            value = readCache()
+            logging.debug("cache is used " + name)
+    except FileNotFoundError:
+        value = updateCache()
+        logging.debug("cache new item " + name)
+    return value
+
 class Fetch():
 
     def __init__(self, novelID):
@@ -451,8 +486,12 @@ class Fetch():
         self._html = None
 
     def _getData(self):
-        html = Download.Pixiv.showPhp(self._novelID)
-        return self._extractData(html)
+        data = json.loads(withFileCache(
+            f"pixiv-showPhp-{self._novelID}",
+            lambda: json.dumps(self._extractData(Download.Pixiv.showPhp(self._novelID)), ensure_ascii=False, separators=(",", ":")),
+            expiry=3*86400
+        ))
+        return data
 
     def html(self):
         if self._html: return self._html
@@ -511,11 +550,12 @@ class Fetch():
         # embed json
         # ダブルクオートを残し、全体をシングルクオートで囲み、ensure_ascii=False を使うと、圧縮できる
         # とはいえjsonなしよりはかなり大きい (47k vs 114k vs 171k)
-        o_json = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-        for (fromStr, toStr) in [
-                ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
-                ]:
-            o_json = o_json.replace(fromStr, toStr)
+        # o_json = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+        # for (fromStr, toStr) in [
+        #         ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
+        #         ]:
+        #     o_json = o_json.replace(fromStr, toStr)
+        o_json = ""
 
         o_tags = ",\n".join(map(lambda y: f"<a href='/?cmd=search&q={percentEncode(y)}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
         o_info = f"""<p>
@@ -943,6 +983,7 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--autosave", action="store_true", help="Enable autosave; save visited novels as files.")
     parser.add_argument("-B", "--nobrowser", action="store_true", help="Don't open browser.")
     parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
+    parser.add_argument("-c", "--cachedir", type=str, default="_cache", help="Directory to store cache (NONE to disable).")
     parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
     parser.add_argument("-p", "--port", type=int, default=8080, help="Port number. (default: 8080)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
@@ -956,6 +997,7 @@ if __name__ == "__main__":
     save = args.autosave
     color = not args.nocolor
     verbose = args.verbose
+    cachedir = args.cachedir
 
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if verbose else logging.ERROR)
 
