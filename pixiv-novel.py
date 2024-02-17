@@ -67,11 +67,15 @@ class MyRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
 
         def sendHTML(html):
+            gz = "gzip" in (self.headers["Accept-Encoding"] or "")
             self.send_response(200)
             self.send_header("Content-type", "text/html")
+            if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             try:
-                self.wfile.write(bytes(html, "utf-8"))
+                data = bytes(html, "utf-8")
+                if gz: data = gzip.compress(data)
+                self.wfile.write(data)
             except BrokenPipeError:
                 logging.warning("BrokenPipeError")
                 return
