@@ -990,12 +990,13 @@ if __name__ == "__main__":
     ## Parse args
     parser = argparse.ArgumentParser(description="Start web server to view pixiv novels. Load cookies.txt if found in current dir.")
     parser.add_argument("-a", "--autosave", action="store_true", help="Enable autosave; save visited novels as files.")
-    parser.add_argument("-b", "--browser", action="store_true", help="Open in browser.")
+    parser.add_argument("-b", "--bind", type=str, metavar="ADDRESS", default="0.0.0.0", help="Bind to this address. (default: 0.0.0.0)")
     parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
     parser.add_argument("-c", "--cachedir", type=str, default="_cache", help="Directory to store cache (NONE to disable).")
     parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
     parser.add_argument("-p", "--port", type=int, default=8080, help="Port number. (default: 8080)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
+    parser.add_argument("--browser", action="store_true", help="Open in browser.")
     parser.add_argument("--sslcert", type=str, help="HTTPS cert file.")
     parser.add_argument("--sslkey", type=str, help="HTTPS key file.")
     parser.add_argument("--test", action="store_true")
@@ -1046,7 +1047,7 @@ if __name__ == "__main__":
         serverHttps = serverCert = serverKey = None
 
     # Run server
-    serverHost = "0.0.0.0" # Also accessible from other computers
+    serverHost = args.bind
     serverPort = args.port
 
     serverThread = threading.Thread(

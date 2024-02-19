@@ -36,8 +36,9 @@ When `HTTP Error` happens, try re-exporting your `cookies.txt`.
 
 ### Options
 ```
-usage: pixiv-novel.py [-h] [-a] [-b] [-C] [-c CACHEDIR] [-d URL] [-p PORT]
-                      [-v] [--sslcert SSLCERT] [--sslkey SSLKEY] [--test]
+usage: pixiv-novel.py [-h] [-a] [-b ADDRESS] [-C] [-c CACHEDIR] [-d URL]
+                      [-p PORT] [-v] [--browser] [--sslcert SSLCERT]
+                      [--sslkey SSLKEY] [--test]
 
 Start web server to view pixiv novels. Load cookies.txt if found in current
 dir.
@@ -45,7 +46,8 @@ dir.
 options:
   -h, --help            show this help message and exit
   -a, --autosave        Enable autosave; save visited novels as files.
-  -b, --browser         Open in browser.
+  -b ADDRESS, --bind ADDRESS
+                        Bind to this address. (default: 0.0.0.0)
   -C, --nocolor         Disable character name colors.
   -c CACHEDIR, --cachedir CACHEDIR
                         Directory to store cache (NONE to disable).
@@ -53,6 +55,7 @@ options:
                         Download a novel and exit.
   -p PORT, --port PORT  Port number. (default: 8080)
   -v, --verbose         Verbose mode.
+  --browser             Open in browser.
   --sslcert SSLCERT     HTTPS cert file.
   --sslkey SSLKEY       HTTPS key file.
   --test
