@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import argparse
 import base64
 import colorsys
+import collections
 import datetime
 import gzip
 import json
@@ -60,64 +61,63 @@ Use `openssl req -new -x509 -keyout CERTFILE -out KEYFILE -days 365 -nodes`."""
 
 class MyRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        dt = datetime.datetime.now().isoformat()[:19].replace("T", " ")
         cli = self.client_address
         logging.debug(("%s:%s " + format) % (cli[0], cli[1], *args))
 
+    def sendHTML(self, html):
+        gz = "gzip" in (self.headers["Accept-Encoding"] or "")
+        data = bytes(html, "utf-8")
+        if gz: data = gzip.compress(data)
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        if gz: self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except BrokenPipeError:
+            logging.warning("BrokenPipeError")
+            return
+
     def do_GET(self):
 
-        def sendHTML(html):
-            gz = "gzip" in (self.headers["Accept-Encoding"] or "")
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            if gz: self.send_header("Content-Encoding", "gzip")
-            self.end_headers()
-            try:
-                data = bytes(html, "utf-8")
-                if gz: data = gzip.compress(data)
-                self.wfile.write(data)
-            except BrokenPipeError:
-                logging.warning("BrokenPipeError")
-                return
+        parsed = urllib.parse.urlparse(self.path)
+        paths  = [x for x in parsed.path.split("/") if x]
+        param  = { k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items() }.get
 
-        params = urllib.parse.parse_qs(self.path[2:])
-        # print(self.requestline, params)
-
-        def param(name, default=None):
-            if not name in params:
-                return default
-            else:
-                return params[name][0]
-
-        def getHTML():
-            cmd = param("cmd", "ranking")
-            if cmd == "fetch":
-                if not (novelID := param("id")):
-                    return "missing id"
-                else:
-                    f = Fetch(novelID)
-                    if save:
-                        f.save()
-                    return f.html()
-            elif cmd in ["search", "searchuser", "ranking"]:
-                if cmd == "search":
-                    s = Search(param("q", ""), param("bookmarks", 0), param("page", "1"), param("npages", 1))
-                elif cmd == "searchuser":
-                    s = SearchUser(param("q", ""), param("bookmarks", 0))
-                elif cmd == "ranking":
+        try:
+            html = ""
+            err = b"400 Bad Request"
+            if len(paths) == 0:
+                s = SearchRanking(param("mode", "daily"), param("date", ""))
+                html = s.html(param("compact", 1))
+            elif len(paths) == 1:
+                if paths[0] == "ranking":
                     s = SearchRanking(param("mode", "daily"), param("date", ""))
-                return s.html(param("compact", 1))
+                    html = s.html(param("compact", 1))
+                elif paths[0] == "search":
+                    s = Search(param("q", ""), param("bookmarks", 0), param("page", "1"), param("npages", 1))
+                    html = s.html(param("compact", 1))
+                elif paths[0] == "user":
+                    s = SearchUser(param("id", ""), param("bookmarks", 0))
+                    html = s.html(param("compact", 1))
+                elif paths[0] == "novel":
+                    if not (novelID := param("id")):
+                        err = b"400 Bad Request: missing id"
+                    else:
+                        f = Fetch(novelID)
+                        if save:
+                            f.save()
+                        html = f.html()
+            if html:
+                self.sendHTML(html)
             else:
-                return "unknown cmd"
-
-        if "favicon" in self.requestline:
-            sendHTML("")
-        else:
-            # sendHTML(getHTML())
-            try:
-                sendHTML(getHTML())
-            except Exception as e:
-                logging.error("Error occured\n" + str(e))
+                self.send_response(400)
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+        except Exception as e:
+            logging.error("Error occured\n" + str(e))
 
 
 ### Search
@@ -135,10 +135,9 @@ def searchEntry(title, tags, id, description, xRestrict, bookmarkCount, textCoun
             }
 
 def html_searchBar(simple=True, query="", compact=False, bookmarks=0, npages=1):
-    html = f"""<form style="text-align: right; line-height: 1.5">
+    html = f"""<form style="text-align: right; line-height: 1.5" action=search>
 <input type="text" name="q" placeholder="検索" value="{query}">
 <input type="submit" value="{emoji['search']}">
-<input type="hidden" name="cmd" value="search">
 <input type="hidden" name="compact" value="{1 if compact else ''}">
 """
     if not simple:
@@ -196,13 +195,13 @@ td:nth-child(4)       { padding-left: 2em }"""
         # novels
         novels = "<table>" if compact else "<ul>"
         for x in self._novels:
-            href = f"/?cmd=fetch&id={x['id']}"
+            href = mkurl("novel", id=x['id'])
             if compact:
                 novels += f"<tr><td><a href=\"{href}\">{x['id']}</a></td><td>{getRSign(x['xRestrict'])}</td><td>{x['bookmarkCount']}</td><td>{x['title']}</td></tr>\n"
             else:
                 desc = "<br>".join(replaceLinks(x["description"]).split("<br />")[0:5])
                 desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
-                tags = ", ".join([f"<a href=\"/?cmd=search&q={percentEncode(t)}\">{t}</a>" for t in x["tags"]])
+                tags = ", ".join([f"<a href=\"{mkurl('search', q=t)}\">{t}</a>" for t in x["tags"]])
                 novels += f"<li>{x['title']} ({x['textCount']}字) <a href=\"{href}\">[{x['id']}]</a><p>{desc}</p>{emoji['love']} {x['bookmarkCount']}<br>{tags}</li><hr>\n"
         novels += "</table>" if compact else "</ul>"
 
@@ -237,12 +236,10 @@ td:nth-child(4)       { padding-left: 2em }"""
 
     def _html_nav(self, compact):
         # navigation links (on both top and bottom of page)
-        paramCompact    = "&compact=1" if     compact else ""
-        paramCompactNeg = "&compact=1" if not compact else ""
-        commonParams = f"?cmd=search&q={self._wordEscaped}&npages={self._npages}&bookmarks={self._bookmarkCount}"
-        hrefPrev = f"/{commonParams}&page={max(1,self._page-self._npages)}{paramCompact}"
-        hrefNext = f"/{commonParams}&page={self._page+self._npages}{paramCompact}"
-        hrefToggle = f"/{commonParams}&page={self._page}{paramCompactNeg}"
+        common = { "q": self._query, "npages": self._npages, "bookmarks": self._bookmarkCount }
+        hrefPrev   = mkurl("search", **common, page=max(1,self._page-self._npages), compact=compact)
+        hrefNext   = mkurl("search", **common, page=self._page+self._npages,        compact=compact)
+        hrefToggle = mkurl("search", **common, page=self._page,                     compact=int(not compact))
         return f"""<div id="nav" style="display: flex">
 <span style="flex: 1">
 <a href="{hrefToggle}">{compact and "詳細表示" or "コンパクト表示"}</a>
@@ -291,7 +288,7 @@ class SearchUser(Search):
 <hr>"""
 
     def _html_nav(self, compact):
-        hrefToggle = f"/?cmd=searchuser&q={self._userID}{'&compact=1' if not compact else ''}"
+        hrefToggle = mkurl("user", id=self._userID, compact=int(not compact))
         return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
 
 class SearchRanking(Search):
@@ -326,14 +323,15 @@ class SearchRanking(Search):
         self._doSearch()
 
     def _doSearch(self):
-        dataList = self._getDataList()
+        dataList = withFileCache(
+            f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}",
+            self._getDataList, 3600)
         self._novels = [
                 searchEntry(x["title"], x["tags"], x["id"], x["description"], x["xRestrict"], x["bookmarkCount"], x["textCount"])
                 for x in dataList
                 ]
 
     def _getDataList(self):
-        url = f"https://www.pixiv.net/novel/ranking.php?mode={self._mode}&date={self._date.isoformat().replace('-', '')}"
         # return self._getDataListFromHTML("".join(open("../r_daily","r").readlines()))
         dataList = []
         for page in [1, 2]:
@@ -379,7 +377,7 @@ class SearchRanking(Search):
 
     def _html_header(self, compact):
         # links for other rankings
-        hrefBase = f"/?cmd=ranking{'&compact=1' if compact else ''}&date={self._date}"
+        hrefBase = mkurl("ranking", compact=compact, date=self._date)
         modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
         if Download.Pixiv.hasCookie():
             modeLinks2 = "<span>R-18:</span>"
@@ -403,17 +401,16 @@ class SearchRanking(Search):
 {html_searchBar(simple=True, query="", compact=compact)}
 {modeLinks}
 <hr>
-<form style="text-align: center; margin: .5em 0">
+<form style="text-align: center; margin: .5em 0" action=ranking>
 <label for="date">日付:</label>
 <input type="date" id="date" name="date" value="{self._date}" max="{yesterday()}">
 <input type="submit" value="{emoji['search']}">
-<input type="hidden" name="cmd" value="ranking">
 <input type="hidden" name="mode" value="{self._mode}">
 <input type="hidden" name="compact" value="{1 if compact else ''}">
 </form>"""
 
     def _html_nav(self, compact):
-        hrefToggle = f"/?cmd=ranking&q={self._mode}{'&compact=1' if not compact else ''}&date={self._date}"
+        hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
         return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
 
 class MyHTMLParser(HTMLParser):
@@ -451,6 +448,7 @@ class MyHTMLParser(HTMLParser):
 def withFileCache(name, getDefault, expiry=600):
     # note: when cache is expired and getDefault fails, returns old cache
     # expiry is in seconds
+    # getDefault should return json-serializable data
     if cachedir == "NONE":
         return getDefault()
     if not re.match(r"^[a-zA-Z0-9-._]*$", name):
@@ -461,11 +459,11 @@ def withFileCache(name, getDefault, expiry=600):
     def updateCache():
         value = getDefault()
         with open(file, "w") as f:
-            f.write(value)
+            json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
         return value
     def readCache():
         with open(file, "r") as f:
-            return f.read()
+            return json.load(f)
     try:
         if datetime.datetime.now().timestamp() - os.stat(file).st_mtime > expiry:
             try:
@@ -490,11 +488,11 @@ class Fetch():
         self._html = None
 
     def _getData(self):
-        data = json.loads(withFileCache(
+        data = withFileCache(
             f"pixiv-showPhp-{self._novelID}",
-            lambda: json.dumps(self._extractData(Download.Pixiv.showPhp(self._novelID)), ensure_ascii=False, separators=(",", ":")),
+            lambda: self._extractData(Download.Pixiv.showPhp(self._novelID)),
             expiry=3*86400
-        ))
+        )
         return data
 
     def html(self):
@@ -561,7 +559,7 @@ class Fetch():
         #     o_json = o_json.replace(fromStr, toStr)
         o_json = ""
 
-        o_tags = ",\n".join(map(lambda y: f"<a href='/?cmd=search&q={percentEncode(y)}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
+        o_tags = ",\n".join(map(lambda y: f"<a href='{mkurl('search', q=y)}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
         o_info = f"""<p>
 タグ:
 {o_tags}
@@ -569,7 +567,7 @@ class Fetch():
 <p>
 <a href="https://www.pixiv.net/novel/show.php?id={data["id"]}">Pixivで開く</a>
 ID:{data["id"]}
-U:<a href="/?cmd=searchuser&q={data["userId"]}">{data["userId"]}</a>
+U:<a href="{mkurl('user', id=data["userId"])}">{data["userId"]}</a>
 B:{data["bookmarkCount"]}
 D:{data["createDate"][:10]}
 </p>"""
@@ -645,20 +643,20 @@ class Download:
 
         # 404 without headers
         _headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
-                'Accept-Encoding': 'gzip',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Pragma': 'no-cache',
-                'Referer': 'https://www.pixiv.net/',
-                'Cache-Control': 'no-cache'
-                }
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+            'Accept-Encoding': 'gzip',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Pragma': 'no-cache',
+            'Referer': 'https://www.pixiv.net/',
+            'Cache-Control': 'no-cache'
+        }
 
         # cookie = readCookiestxtAsHTTPCookieHeader("../cookies.txt", "pixiv.net")
         cookie = None
@@ -900,11 +898,15 @@ def myRequest(url, headers={}, headers2={}, headers3={}, fmt=None):
     else:
         return data
 
-def replaceLinks(desc): # replace novel/xxxxx links and user/xxxxx links
+def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx links
+    f1 = lambda m: mkurl("user", id=m[1])
+    f2 = lambda m: mkurl("novel", id=m[1])
+    g1 = lambda m: f'<a href="{mkurl("user", id=m[1])}">user/{m[1]}</a>'
+    g2 = lambda m: f'<a href="{mkurl("novel", id=m[1])}">novel/{m[1]}</a>'
     for (regex, rep) in [
-            (r"https://www.pixiv.net/users/([0-9]*)", "/?cmd=searchuser&q=\\1"),
-            (r"https://www.pixiv.net/novel/show.php\?id=([0-9]*)", "/?cmd=fetch&id=\\1"),
-            ]:
+        (r"https://www.pixiv.net/users/([0-9]*)",              g1 if addTag else f1),
+        (r"https://www.pixiv.net/novel/show.php\?id=([0-9]*)", g2 if addTag else f2),
+    ]:
         desc = re.sub(regex, rep, desc)
     return desc
 
@@ -913,6 +915,9 @@ def getRSign(xRestrict):
 
 def percentEncode(word):
     return urllib.parse.quote_plus(word, encoding="utf-8")
+
+def mkurl(*args, **kwargs):
+    return "/" + "/".join(percentEncode(str(v)) for v in args if v) + ("?" if kwargs else "") + "&".join(f"{k}={percentEncode(str(v))}" for k, v in kwargs.items() if v)
 
 def addMissingCloseTags(html, tags=["b", "s", "u", "strong"]):
 
