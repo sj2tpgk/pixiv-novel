@@ -1,21 +1,32 @@
-<!-- automatically generated file; do not edit -->
+<!--
+cat readme.md | awk '/@RUN/{while(substr($0,6)|getline out){print out}next}{print}'
+md2html readme.md > readme.html
+-->
+
 # Lightweight pixiv novel viewer
 
 Lightweight frontend for pixiv novels.
 
-Features: search/view novels, view rankings, access age-restricted contents with `cookies.txt`, autosave, generates simple html, no javascript, written in python, no 3rd party dependency, also works on android+termux.
+Features: search/view novels, view rankings, generates simple html, no javascript, autosave, optional login with `cookies.txt`, written in python, no 3rd party dependency, also works on android+termux.
 
 ### Usage
 ``` sh
-wget 'https://raw.githubusercontent.com/sj2tpgk/pixiv-novel/main/pixiv-novel.py'
-python pixiv-novel.py
-# Automatically opens daily ranking in browser (localhost:8080 by default)
+wget 'https://codeberg.org/sj2tpgk/pixiv-novel/raw/branch/main/pixiv-novel.py'
+python pixiv-novel.py --browser
+# Automatically opens daily ranking in browser (0.0.0.0:8080 by default)
 ```
 
+### Instances
+
+* Test instance:
+  [https://noouan.f5.si/](https://noouan.f5.si/)
+  [(onion)](http://4xwgxkd27mor6xds4uh4qh3vwirdxh33lwdj2fecx2zdcmtcr7ua.b32.i2p)
+  [(garlic)](http://bhwtqh42kcbzt3idsmnaklnbgeq2yhidnlxsndglrenz2etjc7yqcvqd.onion)
+
 ### Screenshots
+<img width="450" src="images/novel.png">
 <img width="450" src="images/search.png">
 <img width="450" src="images/top.png">
-<img width="450" src="images/novel.png">
 
 ### Cookies
 To search/view age-restricted contents, put `cookies.txt` in current directory:

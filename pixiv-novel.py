@@ -550,8 +550,7 @@ class Fetch():
             o_content = CharaColor.colorHTML(o_content)
 
         # embed json
-        # ダブルクオートを残し、全体をシングルクオートで囲み、ensure_ascii=False を使うと、圧縮できる
-        # とはいえjsonなしよりはかなり大きい (47k vs 114k vs 171k)
+        # e.g. <div data='{"x":10,"y":"あ"}'></div>
         # o_json = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
         # for (fromStr, toStr) in [
         #         ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
