@@ -1,6 +1,6 @@
 <!--
-cat readme.md | awk '/@RUN/{while(substr($0,6)|getline out){print out}next}{print}'
 md2html readme.md > readme.html
+cat readme.md | awk '/@RUN/{while(substr($0,6)|getline out){print out}next}{print}'
 -->
 
 # Lightweight pixiv novel viewer
@@ -20,8 +20,8 @@ python pixiv-novel.py --browser
 
 * Test instance:
   [https://noouan.f5.si/](https://noouan.f5.si/)
-  [(onion)](http://4xwgxkd27mor6xds4uh4qh3vwirdxh33lwdj2fecx2zdcmtcr7ua.b32.i2p)
-  [(garlic)](http://bhwtqh42kcbzt3idsmnaklnbgeq2yhidnlxsndglrenz2etjc7yqcvqd.onion)
+  [(tor)](http://bhwtqh42kcbzt3idsmnaklnbgeq2yhidnlxsndglrenz2etjc7yqcvqd.onion)
+  [(i2p)](http://4xwgxkd27mor6xds4uh4qh3vwirdxh33lwdj2fecx2zdcmtcr7ua.b32.i2p)
 
 ### Screenshots
 <img width="450" src="images/novel.png">
