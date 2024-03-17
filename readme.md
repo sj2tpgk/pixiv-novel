@@ -1,4 +1,11 @@
 <!--
+TODO
+- cache search result
+- use external json for characters
+- scroll down button
+-->
+
+<!--
 md2html readme.md > readme.html
 cat readme.md | awk '/@RUN/{while(substr($0,6)|getline out){print out}next}{print}'
 -->
