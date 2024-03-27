@@ -610,7 +610,7 @@ D:{data["createDate"][:10]}
             while len(s[:i].encode("utf-8")) + lenSuffixU > lenBytes:
                 i -= 1
             return s[:i] + suffix
-        title = self._data["title"].replace("/", " ").replace('"', " ")
+        title = fsSafeChars(self._data["title"])
         outPrefix = f"{getRSign(self._data['xRestrict'])}"
         outSuffix = f" - pixiv - {self._data['id']}.html"
         outfile = trunc(outPrefix + title, os.pathconf('/', 'PC_NAME_MAX'), outSuffix)
@@ -974,6 +974,9 @@ def openInBrowser(url):
 
 def yesterday():
     return datetime.date.today() - datetime.timedelta(days = 1)
+
+def fsSafeChars(s):
+    return re.sub(r'[\\/*<>|]', " ", s).replace('"', "”").replace(":", "：").replace("?", "？")
 
 
 ### test
