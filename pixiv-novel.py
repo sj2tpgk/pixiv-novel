@@ -535,12 +535,18 @@ class Fetch():
         # pixivimage (may need cookie to retrieve images)
         def getArtworkImageTag(imageId, subIndex):
             url      = f"https://www.pixiv.net/artworks/{imageId}"
-            json1    = Download.Pixiv.artworkPagesJson(imageId)
+            try:
+                json1 = Download.Pixiv.artworkPagesJson(imageId)
+            except urllib.error.HTTPError as e:
+                if e.code == 404: # artwork is deleted etc.
+                    imgdesc = f"[pixivimage:{imageId}{'-'+str(subIndex) if subIndex else ''}]"
+                    return f'<a href="{url}">{imgdesc}: not found</a>'
+                raise e
             imageUrl = json1["body"][int(subIndex or 1)-1]["urls"]["original"]
             imgB64   = base64.b64encode(Download.Pixiv.artworkImage(imageUrl)).decode("utf-8")
             return f"""<figure>
 <a href="{url}">
-<img src=\"data:image/png;base64,{imgB64}\" alt=\"[pixivimage:{imageId}-{subIndex}\" style=\"width: 100%\">
+<img src=\"data:image/png;base64,{imgB64}\" alt=\"[pixivimage:{imageId}-{subIndex}]\" style=\"width: 100%\">
 </a>
 </figure>"""
         o_content = re.sub(r"\[pixivimage:([0-9]*)(-([0-9]*))?\]", lambda m: getArtworkImageTag(m.group(1), m.group(3)), o_content)
@@ -876,7 +882,7 @@ def myRequest(url, headers={}, headers2={}, headers3={}, fmt=None):
     try:
         res = urllib.request.urlopen(req)
     except urllib.error.HTTPError as e:
-        logging.error("myRequest: HTTPError (update cookie or review request headers)", e.code, e.reason)
+        logging.error(f"myRequest: HTTPError (update cookie or review request headers) {e.code} {e.reason}")
         raise e
         # Error when downloading from Pixiv, possibly cookies.txt is outdated, or review http request headers.
     except urllib.error.URLError as e:
