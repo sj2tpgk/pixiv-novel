@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from html.parser import HTMLParser
 import argparse
 import base64
 import colorsys
 import collections
 import datetime
 import gzip
+import html.parser
 import json
 import logging
 import os
@@ -175,10 +175,9 @@ class Search():
                 ]
 
     def _getDataList(self):
-        self._wordEscaped = percentEncode(self._query).replace("+", "%20")
         dataList = []
         for i in range(self._npages):
-            resJson = Download.Pixiv.jsonSearch(self._query, i+self._page)
+            resJson = Resources.Pixiv.jsonSearch(self._query, i+self._page)
             dataList += resJson["body"]["novel"]["data"]
         return dataList
 
@@ -265,7 +264,7 @@ class SearchUser(Search):
         dataList = []
 
         # First, response includes all novelIDs of user
-        json1 = Download.Pixiv.jsonUserAll(self._userID)
+        json1 = Resources.Pixiv.jsonUserAll(self._userID)
         novelIDs = list(json1["body"]["novels"].keys())
 
         # Next, get data for each novel (100 novels at once)
@@ -274,7 +273,7 @@ class SearchUser(Search):
         n = 100
         numRequests = 1 + int((len(novelIDs)-1)/n)
         for ids in [novelIDs[n*i:n*(i+1)] for i in range(numRequests)]:
-            json2 = Download.Pixiv.jsonUserNovels(self._userID, ids)
+            json2 = Resources.Pixiv.jsonUserNovels(self._userID, ids)
             dataList += list(json2["body"]["works"].values())
 
         return dataList
@@ -335,7 +334,7 @@ class SearchRanking(Search):
         # return self._getDataListFromHTML("".join(open("../r_daily","r").readlines()))
         dataList = []
         for page in [1, 2]:
-            res = Download.Pixiv.rankingPhp(self._mode, self._date.isoformat(), page)
+            res = Resources.Pixiv.rankingPhp(self._mode, self._date.isoformat(), page)
             dataList += self._getDataListFromHTML(res)
         return dataList
 
@@ -379,7 +378,7 @@ class SearchRanking(Search):
         # links for other rankings
         hrefBase = mkurl("ranking", compact=compact, date=self._date)
         modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
-        if Download.Pixiv.hasCookie():
+        if Resources.Pixiv.hasCookie():
             modeLinks2 = "<span>R-18:</span>"
             modeLinks2 += "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode].replace(" R-18", "")}</a>""" for mode in self._modeNames.keys() if "r18" in mode])
         else:
@@ -413,7 +412,7 @@ class SearchRanking(Search):
         hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
         return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
 
-class MyHTMLParser(HTMLParser):
+class MyHTMLParser(html.parser.HTMLParser):
     # Usage: MyHTMLParser(onStart, onData).feed(html)
     # On each handle_starttag, onStart(match, attr) is called, where match(query) checks if the tag matches the CSS query, and attr(attrName) is like getAttribute(attrName)
     # On each handle_data, onData(match, data) is called, where match(query) is the same above, and data is the same as in handle_data
@@ -490,7 +489,7 @@ class Fetch():
     def _getData(self):
         data = withFileCache(
             f"pixiv-showPhp-{self._novelID}",
-            lambda: self._extractData(Download.Pixiv.showPhp(self._novelID)),
+            lambda: self._extractData(Resources.Pixiv.showPhp(self._novelID)),
             expiry=3*86400
         )
         return data
@@ -524,7 +523,7 @@ class Fetch():
         # uploadedimage
         def getUploadedImageTag(novelImageId):
             url = data["textEmbeddedImages"][novelImageId]["urls"]["original"]
-            imgB64 = base64.b64encode(Download.Pixiv.uploadedImage(url)).decode("utf-8")
+            imgB64 = base64.b64encode(Resources.Pixiv.uploadedImage(url)).decode("utf-8")
             return f"""<figure>
 <a href="{url}">
 <img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}\" style=\"width: 100%\">
@@ -536,14 +535,14 @@ class Fetch():
         def getArtworkImageTag(imageId, subIndex):
             url      = f"https://www.pixiv.net/artworks/{imageId}"
             try:
-                json1 = Download.Pixiv.artworkPagesJson(imageId)
+                json1 = Resources.Pixiv.artworkPagesJson(imageId)
             except urllib.error.HTTPError as e:
                 if e.code == 404: # artwork is deleted etc.
                     imgdesc = f"[pixivimage:{imageId}{'-'+str(subIndex) if subIndex else ''}]"
                     return f'<a href="{url}">{imgdesc}: not found</a>'
                 raise e
             imageUrl = json1["body"][int(subIndex or 1)-1]["urls"]["original"]
-            imgB64   = base64.b64encode(Download.Pixiv.artworkImage(imageUrl)).decode("utf-8")
+            imgB64   = base64.b64encode(Resources.Pixiv.artworkImage(imageUrl)).decode("utf-8")
             return f"""<figure>
 <a href="{url}">
 <img src=\"data:image/png;base64,{imgB64}\" alt=\"[pixivimage:{imageId}-{subIndex}]\" style=\"width: 100%\">
@@ -637,11 +636,11 @@ D:{data["createDate"][:10]}
         return json1["novel"][list(json1["novel"].keys())[0]]
 
 
-### Download
+### Resources
 
-class Download:
+class Resources:
 
-    # Resource downloading often breaks due to invalidated cookie, change in http request headers etc.
+    # Resource downloading often breaks due to expired cookies, change in request headers etc.
     # So we want unit-testable functions for each resource.
 
     class Pixiv:
@@ -677,70 +676,69 @@ class Download:
         @classmethod
         def showPhp(cls, novelID):
             url = f"https://www.pixiv.net/novel/show.php?id={novelID}"
-            return myRequest(url, headers=cls._headers, headers2=cls.cookieHeader())
+            return httpGet(url, headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
         def rankingPhp(cls, mode, date: str, page: int):
             # Check modes
             MODES = { "daily", "weekly", "monthly", "rookie", "weekly_original", "male", "female", "daily_r18", "weekly_r18", "male_r18", "female_r18", }
             if not mode in MODES:
-                raise Exception(f"Download.Pixiv.rankingPhp: unknown mode {mode} (expected one of [ {', '.join(MODES)} ]")
+                raise Exception(f"Resources.Pixiv.rankingPhp: unknown mode {mode} (expected one of {MODES})")
             if (not cls.hasCookie()) and mode.endswith("r18"):
-                raise Exception(f"Download.Pixiv.rankingPhp: cookie is needed to view ranking of mode {mode}")
+                raise Exception(f"Resources.Pixiv.rankingPhp: cookie is needed to view ranking of mode {mode}")
             # Check date
             if not (isinstance(date, str) and re.match(r"\d\d\d\d-\d\d-\d\d", date)):
-                raise Exception(f"Download.Pixiv.rankingPhp: invalid date {date} (should be YYYY-MM-DD as a str)")
+                raise Exception(f"Resources.Pixiv.rankingPhp: invalid date {date} (should be YYYY-MM-DD as a str)")
             # Make URL
             url = f"https://www.pixiv.net/novel/ranking.php?mode={mode}&date={date.replace('-', '')}"
             if page > 1:
                 url += f"&page={page}"
             # Download
-            return myRequest(url, headers=cls._headers, headers2=(cls.cookieHeader() if mode.endswith("r18") else {}))
+            return httpGet(url, headers=[cls._headers, (cls.cookieHeader() if mode.endswith("r18") else {})])
 
         @classmethod
         def jsonUserAll(cls, userID):
             url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?lang=ja"
-            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
+            return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
         def jsonUserNovels(cls, userID, novelIDs):
             n = 100
             if len(novelIDs) <= 0:
-                raise Exception(f"Download.Pixiv.apiUserIds: at least 1 novel IDs are required")
+                raise Exception(f"Resources.Pixiv.apiUserIds: at least 1 novel IDs are required")
             if len(novelIDs) > n:
-                raise Exception(f"Download.Pixiv.apiUserIds: at most {n} novel IDs are allowed to query at once; got {len(novelIDs)}")
+                raise Exception(f"Resources.Pixiv.apiUserIds: at most {n} novel IDs are allowed to query at once; got {len(novelIDs)}")
             idsParams = "&".join([f"ids[]={x}" for x in novelIDs])
             url = f"https://www.pixiv.net/ajax/user/{userID}/profile/novels?{idsParams}"
-            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
+            return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
         def jsonSearch(cls, word, page):
-            wordEscaped = percentEncode(word).replace("+", "%20")
-            params = f"?word={wordEscaped}&order=date_d&mode=all&p={page}&s_mode=s_tag&lang=ja"
-            url = f"https://www.pixiv.net/ajax/search/novels/{wordEscaped}{params}"
-            return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader())
+            params = f"?word={word}&order=date_d&mode=all&p={page}&s_mode=s_tag&lang=ja"
+            url = f"https://www.pixiv.net/ajax/search/novels/{word}{params}"
+            return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
         def artworkPagesJson(cls, id):
             url = f"https://www.pixiv.net/ajax/illust/{id}/pages?lang=ja"
             try:
-                return myRequest(url, fmt="json", headers=cls._headers, headers2=cls.cookieHeader(), headers3={ "Accept": "application/json" })
+                return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader(), { "Accept": "application/json" }])
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    logging.warning("Download.Pixiv.artworkPagesJson: Artwork not found" + (", or cookie is required to view this artwork" if not cls.hasCookie() else "") + ":", e)
+                    logging.warning("Resources.Pixiv.artworkPagesJson: Artwork not found" + (", or cookie is required to view this artwork" if not cls.hasCookie() else "") + ":", e)
                 else:
-                    logging.error("Download.Pixiv.artworkPagesJson: Unknown error:", e)
+                    logging.error("Resources.Pixiv.artworkPagesJson: Unknown error:", e)
                 raise e
 
         @classmethod
         def artworkImage(cls, url):
             headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
-            return myRequest(url, fmt="raw", headers=cls._headers, headers2=headers2)
+            return httpGet(url, fmt="raw", headers=[cls._headers, headers2])
 
         @classmethod
         def uploadedImage(cls, url):
-            headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
-            return myRequest(url, fmt="raw", headers=cls._headers)
+            # headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
+            return httpGet(url, fmt="raw", headers=cls._headers)
 
 
 
@@ -820,7 +818,7 @@ class CharaColor:
 
         # regex: 1 = line beginning, 2 = name, 3 = open paren etc.
         #         (1   )(2  )(3                   )
-        regex = r"(^\s*)(.*?)([^\S\r\n]*[(（「『｢])"
+        regex = r"(^\s*)(.*?)([^\S\r\n]*[(（「『｢])" # ) dummy parent to fix indent
 
         # Find what series is this html (different serieses may have same name charas with different colors)
         # list of characters found in html (with multiplicity, excluding bad patterns)
@@ -851,57 +849,66 @@ class CharaColor:
 
 ### Misc mini functions
 
-def myRequest(url, headers={}, headers2={}, headers3={}, fmt=None):
-    # Please add functions in Download class and call myRequest() from there.
+class HttpGet:
 
-    # Prevent sending same request many times in a short period
-    if not hasattr(myRequest, "_lastTime"): myRequest._lastTime = 0
-    if not hasattr(myRequest, "_lastUrl"):  myRequest._lastUrl  = None
-    now = time.time() * 1000
-    tooFast = (url == myRequest._lastUrl and now - myRequest._lastTime < 500)
-    myRequest._lastTime, myRequest._lastUrl = now, url
-    if tooFast:
-        raise Exception(f"myRequest: requests to the same url in a short period: {url}")
+    def __init__(self):
+        self.times = {}
 
-    # Check fmt argument
-    if fmt and (not fmt in ["json", "raw", "string"]):
-        raise Exception(f"myRequest: invalid fmt specified: {fmt} (expected one of 'json', 'raw', 'string' or None")
+    def tryDecode(self, data):
+        for enc in ["utf-8", "shift-jis", "euc-jp", "cp932"]:
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                pass
+        assert False, "Could not decode data"
 
-    # %-encode non-ascii chars
-    regex = r'[^\x00-\x7F]'
-    for m in re.findall(regex, url):
-        url = url.replace(m, urllib.parse.quote_plus(m, encoding="utf-8"))
+    def __call__(self, url, fmt="str", headers={}):
+        # fmt: "str" (default), "json", "bytes"
+        # headers: dict or list of dicts (later element har priority)
 
-    # Combine headers and headers2
-    headersAll = { **headers, **headers2, **headers3 } # same property from headers3, then headers2 will survive
+        # %-encode chars not allowed in URI, see https://en.wikipedia.org/wiki/Percent-encoding
+        regex = r"""[^][!"#$&'()*+,/:;=?@A-Za-z0-9_.~-]+"""
+        for m in re.findall(regex, url):
+            url = url.replace(m, urllib.parse.quote(m))
 
-    # Create request
-    req = urllib.request.Request(url, headers=headersAll)
+        # Rate limiting per domain:port
+        loc = urllib.parse.urlparse(url).netloc
+        y = max(self.times.setdefault(loc, 0), (x := time.time())) # send request at y
+        self.times[loc] = y + 0.5 + min(3, y - x) # exponential wait time, at most 3.5 between requests
+        # Sleep if needed
+        if y - x > 0.1:
+            logging.info(f"HttpGet: requests to the same domain {loc} in a short period, sleeping for {y-x}")
+            time.sleep(y - x)
 
-    # Actually send request and catch error
-    try:
-        res = urllib.request.urlopen(req)
-    except urllib.error.HTTPError as e:
-        logging.error(f"myRequest: HTTPError (update cookie or review request headers) {e.code} {e.reason}")
-        raise e
-        # Error when downloading from Pixiv, possibly cookies.txt is outdated, or review http request headers.
-    except urllib.error.URLError as e:
-        raise e
-    except Exception as e:
-        raise e
+        # Merge headers
+        if isinstance(headers, list):
+            headers = dict(sum((list(x.items()) for x in headers), []))
 
-    # decompress, decode, and optionally parse json (and html?)
-    compfmt = "Content-Encoding" in res.headers and res.headers["Content-Encoding"]
-    data = res.read()
-    data = gzip.decompress(data) if compfmt == "gzip" else data # TODO deflate and brotli?
-    if fmt == "raw":
-        return data
+        # Actually send request and catch error
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            res = urllib.request.urlopen(req)
+        except (urllib.error.HTTPError, urllib.error.URLError, Exception) as e:
+            raise e
 
-    data = data.decode("utf-8")
-    if fmt == "json":
-        return json.loads(data)
-    else:
-        return data
+        if res.status != 200:
+            raise Exception(f"http non-200: {res.status}")
+
+        # Decompress, decode, and optionally parse json (and html?)
+        data = res.read()
+        if "gzip" == ("Content-Encoding" in res.headers and res.headers["Content-Encoding"]):
+            data = gzip.decompress(data) # may miss deflate and brotli
+        if fmt == "bytes":
+            return data
+        data = self.tryDecode(data)
+        if fmt == "json":
+            return json.loads(data)
+        elif fmt == "str":
+            return data
+        else:
+            assert False, f"Invalid fmt: {fmt}"
+
+httpGet = HttpGet()
 
 def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx links
     f1 = lambda m: mkurl("user", id=m[1])
@@ -1037,7 +1044,7 @@ if __name__ == "__main__":
 
     # Try read cookies.txt
     # To obtain cookies.txt, use https://addons.mozilla.org/ja/firefox/addon/cookies-txt/ or https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid or type document.cookie in devtool
-    Download.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader("cookies.txt", "pixiv.net")
+    Resources.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader("cookies.txt", "pixiv.net")
 
     # Test code
     if args.test:
