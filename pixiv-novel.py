@@ -36,10 +36,10 @@ import webbrowser
 
 ### Configuration
 
-save     = False  # Save visited novels?
-color    = False  # colorize character names?
+cachedir = ""     # Cache directory ('' to disable)
+color    = False  # Colorize character names?
+savedir  = ""     # Save novels directory ('' to disable)
 verbose  = False  # Show http logs?
-cachedir = "NONE" # Cache directory (NONE to disable)
 
 emoji = { "love": "💙", "search": "🔍" }
 
@@ -108,7 +108,7 @@ class MyRequestHandler(BaseHTTPRequestHandler):
                         err = b"400 Bad Request: missing id"
                     else:
                         f = Fetch(novelID)
-                        if save:
+                        if savedir:
                             f.save()
                         html = f.html()
             if html:
@@ -873,12 +873,12 @@ def withFileCache(name, getDefault, expiry=600):
     # note: when cache is expired and getDefault fails, returns old cache
     # expiry is in seconds
     # getDefault should return json-serializable data
-    if cachedir == "NONE":
+    if not cachedir:
         return getDefault()
     if not re.match(r"^[a-zA-Z0-9-._]*$", name):
         raise Exception("Invalid cache name", name)
     if not os.path.isdir(cachedir):
-        os.mkdir(cachedir)
+        os.makedirs(cachedir, exist_ok=True)
     file = cachedir + os.sep + name
     def updateCache():
         value = getDefault()
@@ -966,8 +966,8 @@ def readCookiestxtAsHTTPCookieHeader(cookiestxt, domain):
                 if len(fields) == 7 and (not domain or fields[0].find(domain) != -1):
                     results += [ f"{fields[5]}={fields[6]}" ]
 
-            # Output will be like "name=val; name=val"
-            return "; ".join(results)
+            logging.info(f"Loaded {len(results)} cookies for {domain} from {cookiestxt}")
+            return "; ".join(results) # something like "name=val; name=val"
 
     except OSError as e:
         logging.warning("Could not read cookies.txt; R-18 search results will be omitted!")
@@ -996,7 +996,8 @@ def saveFile(name, text, maxLenBytes=os.pathconf('/', 'PC_NAME_MAX'), prefix="",
             i -= 1
         return s[:i] + suffix
     outfile = trunc(fsSafeChars(prefix + name), maxLenBytes, fsSafeChars(suffix))
-    with open(outfile, "w") as f: f.write(text)
+    if not os.path.isdir(savedir): os.makedirs(savedir, exist_ok=True)
+    with open(savedir + os.sep + outfile, "w") as f: f.write(text)
     return outfile
 
 
@@ -1008,29 +1009,35 @@ def test():
 
 ### Main
 
-if __name__ == "__main__":
+def main():
+
+    global cachedir, color, savedir, verbose
 
     ## Parse args
-    parser = argparse.ArgumentParser(description="Start web server to view pixiv novels. Load cookies.txt if found in current dir.")
-    parser.add_argument("-a", "--autosave", action="store_true", help="Enable autosave; save visited novels as files.")
-    parser.add_argument("-b", "--bind", type=str, metavar="ADDRESS", default="0.0.0.0", help="Bind to this address. (default: 0.0.0.0)")
-    parser.add_argument("-C", "--nocolor", action="store_true", help="Disable character name colors.")
-    parser.add_argument("-c", "--cachedir", type=str, default="_cache", help="Directory to store cache (NONE to disable).")
-    parser.add_argument("-d", "--download", type=str, metavar="URL", help="Download a novel and exit.")
-    parser.add_argument("-p", "--port", type=int, default=8080, help="Port number. (default: 8080)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
-    parser.add_argument("--browser", action="store_true", help="Open in browser.")
-    parser.add_argument("--sslcert", type=str, help="HTTPS cert file.")
-    parser.add_argument("--sslkey", type=str, help="HTTPS key file.")
-    parser.add_argument("--test", action="store_true")
-    # parser.add_argument("-R", "--nor18", action="store_true", help="Disable R18.")
+    parser = argparse.ArgumentParser(description="Start web server to view pixiv novels.")
+    A = parser.add_argument
+    D1 = " (default: %(default)s)"
+    D2 = " (default: %(default)s; set '' to disable)"
+    A("-b", "--bind",     metavar="ADDR", default="0.0.0.0", help="Bind to this address" + D1)
+    A("-c", "--cachedir", metavar="DIR", default="_cache",   help="Cache directory" + D2)
+    A("-d", "--download", metavar="URL",                     help="Download a novel and exit")
+    A("-k", "--cookie",   default="cookies.txt",             help="Path of cookies.txt" + D2)
+    A("-p", "--port",     type=int, default=8080,            help="Port number" + D1)
+    A("-s", "--savedir",  metavar="DIR", default="_save",    help="Auto save novels in this directory" + D2)
+    A("-v", "--verbose",  action="store_true",               help="Verbose mode")
+    A("--browser", action="store_true", help="Open in browser")
+    A("--nocolor", action="store_true", help="Disable character name colors")
+    A("--sslcert", help="HTTPS cert file")
+    A("--sslkey",  help="HTTPS key file")
+    A("--test",    action="store_true")
+    # parser.add_argument("--nor18", action="store_true", help="Disable R18.")
     args = parser.parse_args()
 
     # Save some options on global
-    save = args.autosave
-    color = not args.nocolor
-    verbose = args.verbose
     cachedir = args.cachedir
+    color    = not args.nocolor
+    savedir  = args.savedir
+    verbose  = args.verbose
 
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if verbose else logging.ERROR)
 
@@ -1052,7 +1059,8 @@ if __name__ == "__main__":
 
     # Try read cookies.txt
     # To obtain cookies.txt, use https://addons.mozilla.org/ja/firefox/addon/cookies-txt/ or https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid or type document.cookie in devtool
-    Resources.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader("cookies.txt", "pixiv.net")
+    if args.cookie:
+        Resources.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader(args.cookie, "pixiv.net")
 
     # Test code
     if args.test:
@@ -1092,3 +1100,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
 
+if __name__ == "__main__":
+    main()

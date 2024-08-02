@@ -54,28 +54,27 @@ When `HTTP Error` happens, try re-exporting your `cookies.txt`.
 
 ### Options
 ```
-usage: pixiv-novel.py [-h] [-a] [-b ADDRESS] [-C] [-c CACHEDIR] [-d URL]
-                      [-p PORT] [-v] [--browser] [--sslcert SSLCERT]
-                      [--sslkey SSLKEY] [--test]
+usage: pixiv-novel.py [-h] [-b ADDR] [-c DIR] [-d URL] [-k COOKIE] [-p PORT] [-s DIR] [-v] [--browser] [--nocolor] [--sslcert SSLCERT] [--sslkey SSLKEY] [--test]
 
-Start web server to view pixiv novels. Load cookies.txt if found in current
-dir.
+Start web server to view pixiv novels.
 
 options:
   -h, --help            show this help message and exit
-  -a, --autosave        Enable autosave; save visited novels as files.
-  -b ADDRESS, --bind ADDRESS
-                        Bind to this address. (default: 0.0.0.0)
-  -C, --nocolor         Disable character name colors.
-  -c CACHEDIR, --cachedir CACHEDIR
-                        Directory to store cache (NONE to disable).
+  -b ADDR, --bind ADDR  Bind to this address (default: 0.0.0.0)
+  -c DIR, --cachedir DIR
+                        Cache directory (default: _cache; set '' to disable)
   -d URL, --download URL
-                        Download a novel and exit.
-  -p PORT, --port PORT  Port number. (default: 8080)
-  -v, --verbose         Verbose mode.
-  --browser             Open in browser.
-  --sslcert SSLCERT     HTTPS cert file.
-  --sslkey SSLKEY       HTTPS key file.
+                        Download a novel and exit
+  -k COOKIE, --cookie COOKIE
+                        Path of cookies.txt (default: cookies.txt; set '' to disable)
+  -p PORT, --port PORT  Port number (default: 8080)
+  -s DIR, --savedir DIR
+                        Auto save novels in this directory (default: _save; set '' to disable)
+  -v, --verbose         Verbose mode
+  --browser             Open in browser
+  --nocolor             Disable character name colors
+  --sslcert SSLCERT     HTTPS cert file
+  --sslkey SSLKEY       HTTPS key file
   --test
 ```
 
