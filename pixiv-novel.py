@@ -15,7 +15,9 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import threading
+import traceback
 import time
 import urllib.error, urllib.parse, urllib.request
 import webbrowser
@@ -117,6 +119,7 @@ class MyRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err)
         except Exception as e:
+            print(traceback.format_exc(), file=sys.stderr)
             logging.error("Error occured\n" + str(e))
 
 
@@ -261,11 +264,13 @@ class SearchUser(Search):
         self._doSearch()
 
     def _getDataList(self):
-        dataList = []
 
         # First, response includes all novelIDs of user
         json1 = Resources.Pixiv.jsonUserAll(self._userID)
-        novelIDs = list(json1["body"]["novels"].keys())
+        novels = json1["body"]["novels"] # a dict or a empty list
+        if len(novels) == 0:
+            return []
+        novelIDs = list(novels.keys())
 
         # Next, get data for each novel (100 novels at once)
         # So, 0 novel = 0 request, 1-100 novels = 1 request, 101-200 = 2 etc.
@@ -444,41 +449,6 @@ class MyHTMLParser(html.parser.HTMLParser):
 
 ### Fetch
 
-def withFileCache(name, getDefault, expiry=600):
-    # note: when cache is expired and getDefault fails, returns old cache
-    # expiry is in seconds
-    # getDefault should return json-serializable data
-    if cachedir == "NONE":
-        return getDefault()
-    if not re.match(r"^[a-zA-Z0-9-._]*$", name):
-        raise Exception("Invalid cache name", name)
-    if not os.path.isdir(cachedir):
-        os.mkdir(cachedir)
-    file = cachedir + os.sep + name
-    def updateCache():
-        value = getDefault()
-        with open(file, "w") as f:
-            json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
-        return value
-    def readCache():
-        with open(file, "r") as f:
-            return json.load(f)
-    try:
-        if datetime.datetime.now().timestamp() - os.stat(file).st_mtime > expiry:
-            try:
-                value = updateCache()
-                logging.debug("cache updating " + name)
-            except:
-                value = readCache()
-                logging.debug("cache failed updating, using old " + name)
-        else:
-            value = readCache()
-            logging.debug("cache is used " + name)
-    except FileNotFoundError:
-        value = updateCache()
-        logging.debug("cache new item " + name)
-    return value
-
 class Fetch():
 
     def __init__(self, novelID):
@@ -526,7 +496,7 @@ class Fetch():
             imgB64 = base64.b64encode(Resources.Pixiv.uploadedImage(url)).decode("utf-8")
             return f"""<figure>
 <a href="{url}">
-<img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}\" style=\"width: 100%\">
+<img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}]\" style=\"width: 100%\">
 </a>
 </figure>"""
         o_content = re.sub(r"\[uploadedimage:([0-9]*)(.*?)\]", lambda m: getUploadedImageTag(m.group(1)), o_content)
@@ -605,22 +575,11 @@ D:{data["createDate"][:10]}
         return self._html
 
     def save(self): # Save to file (will return filename)
-        def trunc(s, lenBytes, suffix=""):
-            # Tuncate s so that (s+suffix).encode("utf-8") has at most lenBytes bytes, and return s+suffix
-            # Will not chop in the middle of byte-sequence representing single unicode character
-            lenS       = len(s)
-            lenSU      = len(s.encode("utf-8"))
-            lenSuffixU = len(suffix.encode("utf-8"))
-            i          = lenS
-            while len(s[:i].encode("utf-8")) + lenSuffixU > lenBytes:
-                i -= 1
-            return s[:i] + suffix
-        title = fsSafeChars(self._data["title"])
-        outPrefix = f"{getRSign(self._data['xRestrict'])}"
-        outSuffix = f" - pixiv - {self._data['id']}.html"
-        outfile = trunc(outPrefix + title, os.pathconf('/', 'PC_NAME_MAX'), outSuffix)
-        open(outfile, "w").write(self.html())
-        return outfile
+        return saveFile(
+            self._data["title"],
+            self.html(),
+            prefix=getRSign(self._data["xRestrict"]),
+            suffix=f" - pixiv - {self._data['id']}.html")
 
     def _extractData(self, html): # parse show.php and get json inside meta[name=preload-data]
         # Extract json string
@@ -910,6 +869,41 @@ class HttpGet:
 
 httpGet = HttpGet()
 
+def withFileCache(name, getDefault, expiry=600):
+    # note: when cache is expired and getDefault fails, returns old cache
+    # expiry is in seconds
+    # getDefault should return json-serializable data
+    if cachedir == "NONE":
+        return getDefault()
+    if not re.match(r"^[a-zA-Z0-9-._]*$", name):
+        raise Exception("Invalid cache name", name)
+    if not os.path.isdir(cachedir):
+        os.mkdir(cachedir)
+    file = cachedir + os.sep + name
+    def updateCache():
+        value = getDefault()
+        with open(file, "w") as f:
+            json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
+        return value
+    def readCache():
+        with open(file, "r") as f:
+            return json.load(f)
+    try:
+        if datetime.datetime.now().timestamp() - os.stat(file).st_mtime > expiry:
+            try:
+                value = updateCache()
+                logging.debug("cache updating " + name)
+            except:
+                value = readCache()
+                logging.debug("cache failed updating, using old " + name)
+        else:
+            value = readCache()
+            logging.debug("cache is used " + name)
+    except FileNotFoundError:
+        value = updateCache()
+        logging.debug("cache new item " + name)
+    return value
+
 def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx links
     f1 = lambda m: mkurl("user", id=m[1])
     f2 = lambda m: mkurl("novel", id=m[1])
@@ -988,8 +982,22 @@ def openInBrowser(url):
 def yesterday():
     return datetime.date.today() - datetime.timedelta(days = 1)
 
-def fsSafeChars(s):
-    return re.sub(r'[\\/*<>|]', " ", s).replace('"', "”").replace(":", "：").replace("?", "？")
+def saveFile(name, text, maxLenBytes=os.pathconf('/', 'PC_NAME_MAX'), prefix="", suffix=""):
+    def fsSafeChars(s):
+        return re.sub(r'[\\/*<>|]', " ", s).replace('"', "”").replace(":", "：").replace("?", "？")
+    def trunc(s, lenBytes, suffix=""):
+        # Tuncate s so that (s+suffix).encode("utf-8") has at most lenBytes bytes, and return s+suffix
+        # Will not chop in the middle of byte-sequence representing single unicode character
+        lenS       = len(s)
+        # lenSU      = len(s.encode("utf-8"))
+        lenSuffixU = len(suffix.encode("utf-8"))
+        i          = lenS
+        while len(s[:i].encode("utf-8")) + lenSuffixU > lenBytes:
+            i -= 1
+        return s[:i] + suffix
+    outfile = trunc(fsSafeChars(prefix + name), maxLenBytes, fsSafeChars(suffix))
+    with open(outfile, "w") as f: f.write(text)
+    return outfile
 
 
 ### test
