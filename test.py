@@ -3,9 +3,8 @@
 import subprocess as sp, time, urllib.error as ue, urllib.parse as up, urllib.request as ur
 
 port = 8001
-proc = sp.Popen(["python", "pixiv-novel.py", "-p", str(port), "-c", "NONE"])
+proc = sp.Popen(["python", "pixiv-novel.py", "-p", str(port), "-c", ""])
 
-first = True
 def test(path):
     time.sleep(1)
     try:

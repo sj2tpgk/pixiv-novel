@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import argparse
 import base64
 import colorsys
-import collections
 import datetime
 import gzip
 import html.parser
+import http.server
 import json
 import logging
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -39,7 +37,6 @@ import webbrowser
 cachedir = ""     # Cache directory ('' to disable)
 color    = False  # Colorize character names?
 savedir  = ""     # Save novels directory ('' to disable)
-verbose  = False  # Show http logs?
 
 emoji = { "love": "💙", "search": "🔍" }
 
@@ -61,7 +58,7 @@ Use `openssl req -new -x509 -keyout CERTFILE -out KEYFILE -days 365 -nodes`."""
         ssl_wrap(httpd, certfile, keyfile)
     httpd.serve_forever()
 
-class MyRequestHandler(BaseHTTPRequestHandler):
+class MyRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         cli = self.client_address
         logging.debug(("%s:%s " + format) % (cli[0], cli[1], *args))
@@ -1011,7 +1008,7 @@ def test():
 
 def main():
 
-    global cachedir, color, savedir, verbose
+    global cachedir, color, savedir
 
     ## Parse args
     parser = argparse.ArgumentParser(description="Start web server to view pixiv novels.")
@@ -1037,9 +1034,8 @@ def main():
     cachedir = args.cachedir
     color    = not args.nocolor
     savedir  = args.savedir
-    verbose  = args.verbose
 
-    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if verbose else logging.ERROR)
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if args.verbose else logging.ERROR)
 
     # Readme
     # - Check out: cool reader (android app)
