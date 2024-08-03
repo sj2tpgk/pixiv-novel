@@ -14,7 +14,7 @@ cat readme.md | awk '/@RUN/{while(substr($0,6)|getline out){print out}next}{prin
 
 Lightweight frontend for pixiv novels.
 
-Features: search/view novels, view rankings, generates simple html, no javascript, autosave, optional login with `cookies.txt`, written in python, no 3rd party dependency, also works on android+termux.
+Features: search/view novels, view rankings, generates simple html, no javascript, autosave, optional login with `cookies.txt`, written in python, single python file with no 3rd party dependency, also works on android+termux.
 
 ### Usage
 ``` sh
@@ -27,8 +27,7 @@ python pixiv-novel.py --browser
 
 * Test instance:
   [https://noouan.f5.si/](https://noouan.f5.si/)
-  [(tor)](http://bhwtqh42kcbzt3idsmnaklnbgeq2yhidnlxsndglrenz2etjc7yqcvqd.onion)
-  [(i2p)](http://4xwgxkd27mor6xds4uh4qh3vwirdxh33lwdj2fecx2zdcmtcr7ua.b32.i2p)
+  [(tor)](http://jntlipzsaheskq3qdab2irgpueuv3jnizges3yywh3cw6k6xzxef6hqd.onion)
 
 ### Screenshots
 <img width="450" src="images/novel.png">
