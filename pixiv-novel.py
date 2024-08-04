@@ -3,6 +3,7 @@
 import argparse
 import base64
 import colorsys
+import dataclasses
 import datetime
 import gzip
 import html.parser
@@ -19,8 +20,10 @@ import traceback
 import time
 import urllib.error, urllib.parse, urllib.request
 import webbrowser
+from typing import *
 
 # base
+# TODO custom style (e.g. load _style.css)
 # TODO no-r mode
 # TODO help page on how to get cookies.txt
 # TODO html extractor: get innerHTML? (do ranking descriptions contain html tags??)
@@ -464,20 +467,8 @@ class Fetch():
     def html(self):
         if self._html: return self._html
 
-        ## Construct html
-
         data = self._data
 
-        o_css = """body { max-width: 700px; margin: 1em auto; padding: 0 .5em; }
-@media screen and (max-aspect-ratio: .75) and (max-width: 13cm) { /* Mobile */
-    body { max-width: 100%; margin: 0.5em 0.5em }
-}
-#novel { line-height: 1.9; border-bottom: solid #888 1px; margin-bottom: 2em; padding-bottom: 3em; }
-#data { display: none }"""
-
-        o_rSign = getRSign(data["xRestrict"])
-        o_title = data["title"]
-        o_description = replaceLinks(data["description"])
         o_content = data["content"]
         for (regex, replace) in [
                 (r"$", "<br>"),
@@ -492,82 +483,43 @@ class Fetch():
             url = data["textEmbeddedImages"][novelImageId]["urls"]["original"]
             imgB64 = base64.b64encode(Resources.Pixiv.uploadedImage(url)).decode("utf-8")
             return f"""<figure>
-<a href="{url}">
-<img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}]\" style=\"width: 100%\">
-</a>
-</figure>"""
+    <a href="{url}">
+    <img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}]\" style=\"width: 100%\">
+    </a>
+    </figure>"""
         o_content = re.sub(r"\[uploadedimage:([0-9]*)(.*?)\]", lambda m: getUploadedImageTag(m.group(1)), o_content)
-
-        # pixivimage (may need cookie to retrieve images)
-        def getArtworkImageTag(imageId, subIndex):
-            url      = f"https://www.pixiv.net/artworks/{imageId}"
-            try:
-                json1 = Resources.Pixiv.artworkPagesJson(imageId)
-            except urllib.error.HTTPError as e:
-                if e.code == 404: # artwork is deleted etc.
-                    imgdesc = f"[pixivimage:{imageId}{'-'+str(subIndex) if subIndex else ''}]"
-                    return f'<a href="{url}">{imgdesc}: not found</a>'
-                raise e
-            imageUrl = json1["body"][int(subIndex or 1)-1]["urls"]["original"]
-            imgB64   = base64.b64encode(Resources.Pixiv.artworkImage(imageUrl)).decode("utf-8")
-            return f"""<figure>
-<a href="{url}">
-<img src=\"data:image/png;base64,{imgB64}\" alt=\"[pixivimage:{imageId}-{subIndex}]\" style=\"width: 100%\">
-</a>
-</figure>"""
-        o_content = re.sub(r"\[pixivimage:([0-9]*)(-([0-9]*))?\]", lambda m: getArtworkImageTag(m.group(1), m.group(3)), o_content)
 
         # colorize character names
         if color:
             o_content = CharaColor.colorHTML(o_content)
 
+        tags = [(y, mkurl('search', q=y)) for y in [x["tag"] for x in data["tags"]["tags"]]]
+
         # embed json
         # e.g. <div data='{"x":10,"y":"あ"}'></div>
-        # o_json = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-        # for (fromStr, toStr) in [
+        # jso1 = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+        # for (fromStr, toStr) in [ # unnecessary if b64 is used
         #         ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
         #         ]:
-        #     o_json = o_json.replace(fromStr, toStr)
-        o_json = ""
+        #     jso1 = jso1.replace(fromStr, toStr)
+        # jso2 = gzip.compress(jso1.encode("utf-8"))
+        # jso3 = base64.b64encode(jso2).decode("utf-8")
 
-        o_tags = ",\n".join(map(lambda y: f"<a href='{mkurl('search', q=y)}'>{y}</a>", [x["tag"] for x in data["tags"]["tags"]]))
-        o_info = f"""<p>
-タグ:
-{o_tags}
-</p>
-<p>
-<a href="https://www.pixiv.net/novel/show.php?id={data["id"]}">Pixivで開く</a>
-ID:{data["id"]}
-U:<a href="{mkurl('user', id=data["userId"])}">{data["userId"]}</a>
-B:{data["bookmarkCount"]}
-D:{data["createDate"][:10]}
-</p>"""
+        d = viewNovelData(
+            site  = "pixiv",
+            title = data["title"],
+            id    = data["id"],
+            rate  = getRSign(data["xRestrict"]),
+            body  = o_content,
+            desc  = replaceLinks(data["description"]),
+            tags  = tags,
+            orig  = f"https://www.pixiv.net/novel/show.php?id={data["id"]}",
+            user  = (data["userId"], mkurl('user', id=data["userId"])),
+            score = data["bookmarkCount"],
+            date  = datetime.datetime.strptime(data["createDate"][:10], "%Y-%m-%d"),
+        )
 
-        self._html = f"""<!DOCTYPE html>
-<html lang="ja">
-<head>
-<title>{o_rSign}{o_title}</title>
-<meta http-equiv="content-type" content="text/html; charset=utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!--<link rel="stylesheet" href="_style.css">-->
-<style>
-{o_css}
-</style>
-</head>
-<body>
-<h1>{o_title}</h1>
-<div id="novel">
-{o_content}
-</div>
-<div id="info">
-<p>
-{o_description}
-</p>
-{o_info}
-</div>
-<div id="data" data-novels='{o_json}'></div>
-</body>
-</html>"""
+        self._html = viewNovel(d)
 
         return self._html
 
@@ -590,6 +542,73 @@ D:{data["createDate"][:10]}
         # Extract part of json
         json1 = json.loads(s)
         return json1["novel"][list(json1["novel"].keys())[0]]
+
+
+### Views
+
+@dataclasses.dataclass
+class viewNovelData:
+    site:  str
+    title: str
+    id:    str # content id (used for id= param)
+    rate:  Literal["", "R", "G"]
+    body:  str
+    desc:  str
+    tags:  list[tuple[str, str]] # list of (name, link)
+    orig:  str
+    user:  tuple[str, str] # (name, link)
+    score: int
+    date:  datetime.datetime
+
+def viewNovel(d:viewNovelData):
+
+    # print(json.dumps(dataclasses.asdict(dataclasses.replace(d, body='')), default=str, ensure_ascii=False, indent=2))
+
+    o_css = """
+        body { max-width: 700px; margin: 1em auto; padding: 0 .5em; }
+        @media screen and (max-aspect-ratio: .75) and (max-width: 13cm) { /* Mobile */
+            body { max-width: 100%; margin: 0.5em 0.5em }
+        }
+        #novel { line-height: 1.9; border-bottom: solid #888 1px; margin-bottom: 2em; padding-bottom: 3em; }
+        #data { display: none }
+    """
+
+    o_tags = ",\n".join(f"<a href='{x[1]}'>{x[0]}</a>" for x in d.tags)
+
+    o_rSign = re.sub("^ *", " ", d.rate) if d.rate else ""
+
+    o_info = f"""
+        <p> タグ: {o_tags} </p>
+        <p>
+            <a href="{d.orig}">{d.site.capitalize()}で開く</a>
+            ID:{d.id}
+            U:<a href="{d.user[1]}">{d.user[0]}</a>
+            B:{d.score}
+            D:{d.date.strftime("%Y-%m-%d")}
+        </p>
+    """
+
+    o_html = f"""
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <title>{o_rSign}{d.title}</title>
+            <meta http-equiv="content-type" content="text/html; charset=utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <!--<link rel="stylesheet" href="_style.css">-->
+            <style>{o_css}</style>
+        </head>
+        <body>
+            <h1>{d.title}</h1>
+            <div id="novel"> {d.body} </div>
+            <div id="info"> <p> {d.desc} </p> {o_info} </div>
+        </body>
+        </html>
+    """
+    o_html = "\n".join(x.strip() for x in o_html.splitlines())
+    # <div id="data" data-novels='{o_json}'></div>
+
+    return o_html
 
 
 ### Resources
@@ -695,7 +714,6 @@ class Resources:
         def uploadedImage(cls, url):
             # headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
             return httpGet(url, fmt="raw", headers=cls._headers)
-
 
 
 ### Character name colorizer
