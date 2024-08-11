@@ -125,36 +125,6 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
 
 ### Search
 
-def searchEntry(title, tags, id, description, xRestrict, bookmarkCount, textCount):
-    # Abstracts (1) response json format and (2) difference between websites
-    return {
-            "title"         : title,
-            "tags"          : tags,
-            "id"            : id,
-            "description"   : description,
-            "xRestrict"     : xRestrict,
-            "bookmarkCount" : bookmarkCount,
-            "textCount"     : textCount,
-            }
-
-def html_searchBar(simple=True, query="", compact=False, bookmarks=0, npages=1):
-    html = f"""<form style="text-align: right; line-height: 1.5" action=search>
-<input type="text" name="q" placeholder="検索" value="{query}">
-<input type="submit" value="{emoji['search']}">
-<input type="hidden" name="compact" value="{1 if compact else ''}">
-"""
-    if not simple:
-        html += f"""<br>
-<select name="npages">
-<option value="1"{" selected" if npages == 1 else ""}>1ページずつ
-<option value="2"{" selected" if npages == 2 else ""}>2ページずつ
-<option value="3"{" selected" if npages == 3 else ""}>3ページずつ
-</select>
-{emoji['love']}:<input type="text" name="bookmarks" value="{bookmarks}" size="3">
-"""
-    html += "</form>"
-    return html
-
 class Search():
 
     # Usage: print(Search("abc",10,1,1).html())
@@ -170,12 +140,14 @@ class Search():
         self._doSearch()
 
     def _doSearch(self):
-        dataList = self._getDataList()
-        self._novels = [
-                searchEntry(x["title"], x["tags"], x["id"], x["description"], x["xRestrict"], x["bookmarkCount"], x["textCount"])
-                for x in dataList
-                if int(x["bookmarkCount"]) >= self._bookmarkCount
-                ]
+        self._dataList = [
+            x for x in withFileCache(self._cacheName(), self._getDataList, 3600)
+            if x["bookmarkCount"] >= self._bookmarkCount
+        ]
+
+    def _cacheName(self):
+        qenc = ''.join(hex(x)[2:] for x in self._query.encode())
+        return f"pixiv-search-{qenc}-{self._page}-{self._npages}"
 
     def _getDataList(self):
         dataList = []
@@ -185,56 +157,37 @@ class Search():
         return dataList
 
     def html(self, compact):
-        compact = compact == "1"
 
-        # common css
-        css = """body { max-width: 750px; margin: 1em auto; padding: 0 .5em; }
-#main { margin: 1em 0 }
-li p { margin: 1.5em 0 }
-td:not(:nth-child(4)) { text-align: center; padding: 0 .35em }
-td:nth-child(4)       { padding-left: 2em }"""
+        items = [viewSearchDataItem(
+            title  = x["title"],
+            id     = x["id"],
+            tags   = [(y, mkurl('search', q=y)) for y in x["tags"]],
+            rate   = getRSign(x["xRestrict"]),
+            desc   = x["description"],
+            score  = x["bookmarkCount"],
+            length = x["textCount"],
+        ) for x in self._dataList]
 
-        # novels
-        novels = "<table>" if compact else "<ul>"
-        for x in self._novels:
-            href = mkurl("novel", id=x['id'])
-            if compact:
-                novels += f"<tr><td><a href=\"{href}\">{x['id']}</a></td><td>{getRSign(x['xRestrict'])}</td><td>{x['bookmarkCount']}</td><td>{x['title']}</td></tr>\n"
-            else:
-                desc = "<br>".join(replaceLinks(x["description"]).split("<br />")[0:5])
-                desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
-                tags = ", ".join([f"<a href=\"{mkurl('search', q=t)}\">{t}</a>" for t in x["tags"]])
-                novels += f"<li>{x['title']} ({x['textCount']}字) <a href=\"{href}\">[{x['id']}]</a><p>{desc}</p>{emoji['love']} {x['bookmarkCount']}<br>{tags}</li><hr>\n"
-        novels += "</table>" if compact else "</ul>"
+        attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
 
-        # final html
-        return f"""<!DOCTYPE html>
-<html lang="ja">
-<head>
-{self._html_head()}
-<meta http-equiv="content-type" content="text/html; charset=utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-{css}
-</style>
-</head>
-<body>
-{self._html_header(compact)}
-{self._html_nav(compact)}
-<div id="main">
-{novels}
-</div>
-{self._html_nav(compact)}
-</body>
-</html>"""
+        d = viewSearchData(
+            site   = "pixiv",
+            title  = self._html_title(),
+            query  = attr("_query", ""),
+            score  = attr("_bookmarkCount", 0),
+            page   = attr("_page", 0),
+            npages = attr("_npages", 0),
+            mode   = "compact" if (compact == "1") else "detailed",
+            items  = items,
+        )
 
-    def _html_head(self):
-        return f"<title>Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}</title>"
+        return viewSearch(d, lambda: self._html_header(compact == "1"), lambda: self._html_nav(compact == "1"))
+
+    def _html_title(self):
+        return f"Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}"
 
     def _html_header(self, compact):
-        return f"""<h1>Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}</h1>
-{html_searchBar(simple=False, query=self._query, compact=compact, bookmarks=self._bookmarkCount, npages=self._npages)}
-<hr>"""
+        return ""
 
     def _html_nav(self, compact):
         # navigation links (on both top and bottom of page)
@@ -263,6 +216,9 @@ class SearchUser(Search):
 
         self._doSearch()
 
+    def _cacheName(self):
+        return f"pixiv-user-{self._userID}"
+
     def _getDataList(self):
 
         # First, response includes all novelIDs of user
@@ -283,13 +239,11 @@ class SearchUser(Search):
 
         return dataList
 
-    def _html_head(self):
-        return f"<title>Search {self._userID}</title>"
+    def _html_title(self):
+        return f"Search {self._userID}"
 
     def _html_header(self, compact):
-        return f"""<h1>Search {self._userID}</h1>
-{html_searchBar(simple=True, query="", compact=compact)}
-<hr>"""
+        return ""
 
     def _html_nav(self, compact):
         hrefToggle = mkurl("user", id=self._userID, compact=int(not compact))
@@ -324,16 +278,12 @@ class SearchRanking(Search):
         else:
             self._date = yesterday()
 
+        self._bookmarkCount = 0
+
         self._doSearch()
 
-    def _doSearch(self):
-        dataList = withFileCache(
-            f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}",
-            self._getDataList, 3600)
-        self._novels = [
-                searchEntry(x["title"], x["tags"], x["id"], x["description"], x["xRestrict"], x["bookmarkCount"], x["textCount"])
-                for x in dataList
-                ]
+    def _cacheName(self):
+        return f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}"
 
     def _getDataList(self):
         # return self._getDataListFromHTML("".join(open("../r_daily","r").readlines()))
@@ -344,13 +294,12 @@ class SearchRanking(Search):
         return dataList
 
     def _getDataListFromHTML(self, html):
-        # searchEntry(title, tags, id, description, xRestrict, bookmarkCount, textCount):
         data = []
         current = None
         def done():
             nonlocal current, data
             if current:
-                data += [searchEntry(**current)]
+                data += [current]
             current = {}
         def setp(prop, val):
             current[prop] = val
@@ -365,7 +314,7 @@ class SearchRanking(Search):
                 setp("id",    attr("data-id"))
         def onData(match, data):
             if match(".bookmark-count"):
-                setp("bookmarkCount", re.sub(r"[^\d]", "", data))
+                setp("bookmarkCount", int(re.sub(r"[^\d]", "", data) or 0))
             elif match(".chars"):
                 setp("textCount", re.sub(r"[^\d]", "", data))
             elif match(".novel-caption"):
@@ -376,8 +325,8 @@ class SearchRanking(Search):
         # print(json.dumps([[x["title"]] for x in data], indent=2, sort_keys=True, ensure_ascii=False))
         return data
 
-    def _html_head(self):
-        return f"<title>{self._modeNames[self._mode]} ランキング {self._date}</title>"
+    def _html_title(self):
+        return f"{self._modeNames[self._mode]} ランキング {self._date}"
 
     def _html_header(self, compact):
         # links for other rankings
@@ -401,10 +350,8 @@ class SearchRanking(Search):
 </p>"""
 
         # construct html
-        return f"""<h1>{self._modeNames[self._mode]} ランキング {self._date}</h1>
-{html_searchBar(simple=True, query="", compact=compact)}
+        return f"""
 {modeLinks}
-<hr>
 <form style="text-align: center; margin: .5em 0" action=ranking>
 <label for="date">日付:</label>
 <input type="date" id="date" name="date" value="{self._date}" max="{yesterday()}">
@@ -416,35 +363,6 @@ class SearchRanking(Search):
     def _html_nav(self, compact):
         hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
         return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
-
-class MyHTMLParser(html.parser.HTMLParser):
-    # Usage: MyHTMLParser(onStart, onData).feed(html)
-    # On each handle_starttag, onStart(match, attr) is called, where match(query) checks if the tag matches the CSS query, and attr(attrName) is like getAttribute(attrName)
-    # On each handle_data, onData(match, data) is called, where match(query) is the same above, and data is the same as in handle_data
-    def __init__(self, onStart, onData):
-        super().__init__()
-        self._stack = []
-        self._onStart = onStart
-        self._onData = onData
-    def _attr(self, attr):
-        if len(self._stack) == 0: return
-        for (k, v) in self._stack[-1]["attrs"]:
-            if k == attr:
-                return v
-    def _match(self, query):
-        if not re.match(r"^\.[^\s.]*$", query):
-            logging.error("Query must be like .CLASS")
-            return
-        return re.sub(r"\.", "", query) in (self._attr("class") or "").split()
-    def handle_starttag(self, tag, attrs):
-        self._stack.append({ "tag": tag, "attrs": attrs })
-        self._onStart(self._match, self._attr)
-        if tag in ["img"]:
-            self._stack.pop()
-    def handle_endtag(self, tag):
-        self._stack.pop()
-    def handle_data(self, data):
-        self._onData(self._match, data)
 
 
 ### Fetch
@@ -608,6 +526,100 @@ def viewNovel(d:viewNovelData):
     o_html = "\n".join(x.strip() for x in o_html.splitlines())
     # <div id="data" data-novels='{o_json}'></div>
 
+    return o_html
+
+@dataclasses.dataclass
+class viewSearchDataItem:
+    title:  str
+    id:     str
+    tags:   list[tuple[str, str]] # name, url
+    rate:   Literal["", "R", "G"]
+    desc:   str
+    score:  int
+    length: int
+
+@dataclasses.dataclass
+class viewSearchData:
+    site:   str
+    title:  str
+    query:  str
+    score:  int # TODO: replace with generic filtering condition
+    # filter: dict
+    page:   int
+    npages: int
+    mode:   Literal["detailed", "compact", "tiled"] # view mode
+    items:  list[viewSearchDataItem]
+
+def viewSearch(d:viewSearchData, headerFunc, navFunc):
+
+    def searchBar(query="", compact=False, bookmarks=0, npages=1):
+        html = f"""
+            <form style="text-align: right; line-height: 1.5" action=search>
+                <input type="text" name="q" placeholder="検索" value="{query}">
+                <input type="submit" value="{emoji['search']}">
+                <input type="hidden" name="compact" value="{1 if compact else ''}">
+        """
+        html += f"""
+                <br>
+                <select name="npages">
+                <option value="1"{" selected" if npages == 1 else ""}>1ページずつ
+                <option value="2"{" selected" if npages == 2 else ""}>2ページずつ
+                <option value="3"{" selected" if npages == 3 else ""}>3ページずつ
+                </select>
+                {emoji['love']}:<input type="text" name="bookmarks" value="{bookmarks}" size="3">
+        """ if query else ""
+        html += f"""
+            </form>
+        """
+        return html
+
+    # common css
+    css = """
+        body { max-width: 750px; margin: 1em auto; padding: 0 .5em; }
+        #main { margin: 1em 0 }
+        li p { margin: 1.5em 0 }
+        td:not(:nth-child(4)) { text-align: center; padding: 0 .35em }
+        td:nth-child(4) { padding-left: 2em }
+    """
+
+    # novels
+    novels = "<table>" if d.mode == "compact" else "<ul>"
+    for x in d.items: # self._novels
+        href = mkurl("novel", id=x.id)
+        if d.mode == "compact":
+            novels += f"<tr><td><a href=\"{href}\">{x.id}</a></td><td>{re.sub("^ *", " ", x.rate) if x.rate else ""}</td><td>{x.score}</td><td>{x.title}</td></tr>\n"
+        else:
+            desc = "<br>".join(replaceLinks(x.desc).split("<br />")[0:5])
+            desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
+            tags = ", ".join([f"<a href=\"{y[1]}\">{y[0]}</a>" for y in x.tags])
+            novels += f"<li>{x.title} ({x.length}字) <a href=\"{href}\">[{x.id}]</a><p>{desc}</p>{emoji['love']} {x.score}<br>{tags}</li><hr>\n"
+    novels += "</table>" if d.mode == "compact" else "</ul>"
+
+    # search bar
+    o_searchBar = searchBar(query=d.query, compact=(d.mode == "compact"), bookmarks=d.score, npages=d.npages)
+
+    # final html
+    o_html = f"""
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <title>{d.title}</title>
+            <meta http-equiv="content-type" content="text/html; charset=utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style> {css} </style>
+        </head>
+        <body>
+            <h1>{d.title}</h1>
+            {o_searchBar}
+            {headerFunc()}
+            <hr>
+            {navFunc()}
+            <div id="main"> {novels} </div>
+            {navFunc()}
+        </body>
+        </html>
+    """
+    o_html = "\n".join(x.strip() for x in o_html.splitlines())
     return o_html
 
 
@@ -919,6 +931,35 @@ def withFileCache(name, getDefault, expiry=600):
         logging.debug("cache new item " + name)
     return value
 
+class MyHTMLParser(html.parser.HTMLParser):
+    # Usage: MyHTMLParser(onStart, onData).feed(html)
+    # On each handle_starttag, onStart(match, attr) is called, where match(query) checks if the tag matches the CSS query, and attr(attrName) is like getAttribute(attrName)
+    # On each handle_data, onData(match, data) is called, where match(query) is the same above, and data is the same as in handle_data
+    def __init__(self, onStart, onData):
+        super().__init__()
+        self._stack = []
+        self._onStart = onStart
+        self._onData = onData
+    def _attr(self, attr):
+        if len(self._stack) == 0: return
+        for (k, v) in self._stack[-1]["attrs"]:
+            if k == attr:
+                return v
+    def _match(self, query):
+        if not re.match(r"^\.[^\s.]*$", query):
+            logging.error("Query must be like .CLASS")
+            return
+        return re.sub(r"\.", "", query) in (self._attr("class") or "").split()
+    def handle_starttag(self, tag, attrs):
+        self._stack.append({ "tag": tag, "attrs": attrs })
+        self._onStart(self._match, self._attr)
+        if tag in ["img"]:
+            self._stack.pop()
+    def handle_endtag(self, tag):
+        self._stack.pop()
+    def handle_data(self, data):
+        self._onData(self._match, data)
+
 def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx links
     f1 = lambda m: mkurl("user", id=m[1])
     f2 = lambda m: mkurl("novel", id=m[1])
@@ -1038,6 +1079,7 @@ def test():
         test("/")
         test("/novel?id=15898879")
         test("/search?q=" + up.quote("著作権フリー"))
+        test("/user?id=15370995")
     finally:
         proc.kill()
 
