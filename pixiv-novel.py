@@ -142,7 +142,7 @@ class Search():
     def _doSearch(self):
         self._dataList = [
             x for x in withFileCache(self._cacheName(), self._getDataList, 3600)
-            if x["bookmarkCount"] >= self._bookmarkCount
+            if int(x["bookmarkCount"]) >= self._bookmarkCount
         ]
 
     def _cacheName(self):
@@ -431,7 +431,7 @@ class Fetch():
             body  = o_content,
             desc  = replaceLinks(data["description"]),
             tags  = tags,
-            orig  = f"https://www.pixiv.net/novel/show.php?id={data["id"]}",
+            orig  = f"https://www.pixiv.net/novel/show.php?id={data['id']}",
             user  = (data["userId"], mkurl('user', id=data["userId"])),
             score = data["bookmarkCount"],
             date  = datetime.datetime.strptime(data["createDate"][:10], "%Y-%m-%d"),
@@ -587,7 +587,7 @@ def viewSearch(d:viewSearchData, headerFunc, navFunc):
     for x in d.items: # self._novels
         href = mkurl("novel", id=x.id)
         if d.mode == "compact":
-            novels += f"<tr><td><a href=\"{href}\">{x.id}</a></td><td>{re.sub("^ *", " ", x.rate) if x.rate else ""}</td><td>{x.score}</td><td>{x.title}</td></tr>\n"
+            novels += f"<tr><td><a href=\"{href}\">{x.id}</a></td><td>{re.sub('^ *', ' ', x.rate) if x.rate else ''}</td><td>{x.score}</td><td>{x.title}</td></tr>\n"
         else:
             desc = "<br>".join(replaceLinks(x.desc).split("<br />")[0:5])
             desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
