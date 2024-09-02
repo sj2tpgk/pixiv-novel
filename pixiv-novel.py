@@ -781,7 +781,24 @@ class CharaColor:
             "風倉 モエ": "#beadab", "才羽 モモイ": "#fddca6",
             "早瀬 ユウカ": "#615b96", "花岡 ユズ": "#fc7c82",
             "宇沢 レイサ": "#fef3fb",
-        }
+        },
+        "学園アイドルマスター": { # from https://github.com/vertesan/gakumasu-diff/blob/main/CharacterColor.yaml
+            "P": "#555555", "Ｐ": "#555555",
+            "花海 咲季": "#FF4F64",
+            "月村 手毬": "#27B4EB",
+            "藤田 ことね": "#FFD203",
+            "有村 麻央": "#C45DC8",
+            "葛城 リーリヤ": "#D2E3E4",
+            "倉本 千奈": "#FE8A22",
+            "紫雲 清夏": "#92DE5A",
+            "篠澤 広": "#00BED8",
+            "姫崎 莉波": "#FD7EC2",
+            "十王 星南": "#FFAC28",
+            "秦谷 美鈴": "#6EA3FC",
+            "花海 佑芽": "#F74C2C",
+            "根緒 亜紗里": "#988D83",
+            "十王 邦夫": "#988D83",
+        },
     }
 
     _db = {} # same as _db0, but with better saturation and lightness, and uses rgb() format. also last name and name with spaces stripped as keys
@@ -790,6 +807,7 @@ class CharaColor:
         for name in _db0[series]:
             color1   = _db0[series][name]
             match    = re.match(r"#(..)(..)(..)", re.sub(r"#(.)(.)(.)$", r"\1\1\2\2\3\3", color1))
+            assert match, f"Invalid color {color1} (expected: #rrggbb or #rgb)"
             h,l,s    = colorsys.rgb_to_hls(*[int(x, 16) / 256 for x in match.groups()])
             r,g,b    = colorsys.hls_to_rgb(*[h, _lightness, _saturation] if s > 0.01 else [h, l, s])
             color2   = "rgb(%s)" % ",".join([str(int(x * 256)) for x in [r, g, b]])
