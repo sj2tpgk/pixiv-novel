@@ -396,16 +396,36 @@ class Fetch():
                 ]:
             o_content = re.sub(regex, replace, o_content, flags=re.MULTILINE)
 
+        # threshold on total embedded image size
+        # if total image size exceeds MAX_TOTAL_IMAGE_SIZE, return only link next time
+        MAX_TOTAL_IMAGE_SIZE  = 5 * 10**6 # 5 MBytes
+        currentTotalImageSize = 0 # 0 Byte
+
+        # pixivimage
+        def getPixivImg(imgId):
+            assert imgId.isdigit()
+            jso = Resources.Pixiv.artworkPagesJson(imgId)
+            url = jso["body"][0]["urls"]["original"]
+            return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.artworkImage(url)
+
         # uploadedimage
-        def getUploadedImageTag(novelImageId):
-            url = data["textEmbeddedImages"][novelImageId]["urls"]["original"]
-            imgB64 = base64.b64encode(Resources.Pixiv.uploadedImage(url)).decode("utf-8")
-            return f"""<figure>
-    <a href="{url}">
-    <img src=\"data:image/png;base64,{imgB64}\" alt=\"[uploadedimage:{novelImageId}]\" style=\"width: 100%\">
-    </a>
-    </figure>"""
-        o_content = re.sub(r"\[uploadedimage:([0-9]*)(.*?)\]", lambda m: getUploadedImageTag(m.group(1)), o_content)
+        def getUploadedImg(imgId):
+            assert imgId.isdigit()
+            url = data["textEmbeddedImages"][imgId]["urls"]["original"]
+            return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.uploadedImage(url)
+
+        # create image tag
+        def getImgTag(imgType:"Literal['uploadedimage', 'pixivimage']", imgId):
+            nonlocal currentTotalImageSize
+            url, img = (getPixivImg if imgType == "pixivimage" else getUploadedImg)(imgId)
+            if not img:
+                return f"""<figure><a href="{url}">[{imgType}:{imgId}]</a></figure>"""
+            currentTotalImageSize += len(img)
+            imgB64 = base64.b64encode(img).decode("utf-8")
+            return f"""<figure><a href="{url}"><img src=\"data:image/png;base64,{imgB64}\" alt=\"[{imgType}:{imgId}]\" style=\"width: 100%\"></a></figure>"""
+
+        # replace image links
+        o_content = re.sub(r"\[(pixivimage|uploadedimage):(.*?)\]", lambda m: getImgTag(m.group(1), m.group(2)), o_content)
 
         # colorize character names
         if color:
@@ -720,12 +740,12 @@ class Resources:
         @classmethod
         def artworkImage(cls, url):
             headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
-            return httpGet(url, fmt="raw", headers=[cls._headers, headers2])
+            return httpGet(url, fmt="bytes", headers=[cls._headers, headers2])
 
         @classmethod
         def uploadedImage(cls, url):
             # headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
-            return httpGet(url, fmt="raw", headers=cls._headers)
+            return httpGet(url, fmt="bytes", headers=cls._headers)
 
 
 ### Character name colorizer
@@ -866,9 +886,11 @@ class HttpGet:
                 pass
         assert False, "Could not decode data"
 
-    def __call__(self, url, fmt="str", headers={}):
+    def __call__(self, url, fmt:"Literal['str','json','bytes']"="str", headers={}):
         # fmt: "str" (default), "json", "bytes"
         # headers: dict or list of dicts (later element har priority)
+
+        assert fmt in ["str", "json", "bytes"]
 
         # %-encode chars not allowed in URI, see https://en.wikipedia.org/wiki/Percent-encoding
         regex = r"""[^][!"#$&'()*+,/:;=?@A-Za-z0-9_.~-]+"""
