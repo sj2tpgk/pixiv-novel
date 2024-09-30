@@ -38,9 +38,12 @@ from typing import *
 
 ### Configuration
 
-cachedir = ""     # Cache directory ('' to disable)
-color    = False  # Colorize character names?
-savedir  = ""     # Save novels directory ('' to disable)
+CONFIG = {
+    "cachedir" : "",     # Cache directory ('' to disable)
+    "nocolor"  : False,  # Disable colorizing character names?
+    "savedir"  : "",     # Save novels directory ('' to disable)
+    "noimage"  : False,  # Disable embedding images?
+}
 
 emoji = { "love": "💙", "search": "🔍" }
 
@@ -143,7 +146,7 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
             # Render view
             html = makeView(data) # e.g. viewNovel(data:viewNovelData) : str (html as a string)
             # Save function
-            if savedir and (type(data) is viewNovelData):
+            if CONFIG["savedir"] and (type(data) is viewNovelData):
                 saveFile(data.title,
                          html,
                          prefix=getRSign(data.rate),
@@ -413,7 +416,7 @@ class BackendPixiv:
 
             # threshold on total embedded image size
             # if total image size exceeds MAX_TOTAL_IMAGE_SIZE, return only link next time
-            MAX_TOTAL_IMAGE_SIZE  = 5 * 10**6 # 5 MBytes
+            MAX_TOTAL_IMAGE_SIZE  = 0 if CONFIG["noimage"] else (5 * 10**6) # 5 MBytes
             currentTotalImageSize = 0 # 0 Byte
 
             # pixivimage
@@ -443,7 +446,7 @@ class BackendPixiv:
             o_content = re.sub(r"\[(pixivimage|uploadedimage):(.*?)\]", lambda m: getImgTag(m.group(1), m.group(2)), o_content)
 
             # colorize character names
-            if color:
+            if not CONFIG["nocolor"]:
                 o_content = CharaColor.colorHTML(o_content)
 
             tags = [(y, mkurl('search', q=y)) for y in [x["tag"] for x in jso["tags"]["tags"]]]
@@ -956,6 +959,7 @@ def withFileCache(name, getDefault, expiry=600):
     # note: when cache is expired and getDefault fails, returns old cache
     # expiry is in seconds
     # getDefault should return json-serializable data
+    cachedir = CONFIG["cachedir"]
     if not cachedir:
         return getDefault()
     if not re.match(r"^[a-zA-Z0-9-._]*$", name):
@@ -1115,6 +1119,7 @@ def saveFile(name, text, maxLenBytes=os.pathconf('/', 'PC_NAME_MAX'), prefix="",
             i -= 1
         return s[:i] + suffix
     outfile = trunc(fsSafeChars(prefix + name), maxLenBytes, fsSafeChars(suffix))
+    savedir = CONFIG["savedir"]
     if not os.path.isdir(savedir): os.makedirs(savedir, exist_ok=True)
     with open(savedir + os.sep + outfile, "w") as f: f.write(text)
     return outfile
@@ -1158,7 +1163,7 @@ def test():
 
 def main():
 
-    global cachedir, color, savedir
+    global CONFIG
 
     ## Parse args
     parser = argparse.ArgumentParser(description="Start web server to view pixiv novels.")
@@ -1174,6 +1179,7 @@ def main():
     A("-v", "--verbose",  action="store_true",               help="Verbose mode")
     A("--browser", action="store_true", help="Open in browser")
     A("--nocolor", action="store_true", help="Disable character name colors")
+    A("--noimage", action="store_true", help="Disable image embedding")
     A("--sslcert", help="HTTPS cert file")
     A("--sslkey",  help="HTTPS key file")
     A("--test",    action="store_true")
@@ -1181,9 +1187,10 @@ def main():
     args = parser.parse_args()
 
     # Save some options on global
-    cachedir = args.cachedir
-    color    = not args.nocolor
-    savedir  = args.savedir
+    CONFIG["cachedir"] = args.cachedir
+    CONFIG["nocolor"]  = args.nocolor
+    CONFIG["savedir"]  = args.savedir
+    CONFIG["noimage"]  = args.noimage
 
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if args.verbose else logging.ERROR)
 
