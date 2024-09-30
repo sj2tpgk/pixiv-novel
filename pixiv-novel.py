@@ -20,6 +20,7 @@ import traceback
 import time
 import urllib.error, urllib.parse, urllib.request
 import webbrowser
+from html import escape, unescape
 from typing import *
 
 # base
@@ -42,6 +43,13 @@ color    = False  # Colorize character names?
 savedir  = ""     # Save novels directory ('' to disable)
 
 emoji = { "love": "💙", "search": "🔍" }
+
+def fcache(expiry=600, namef=lambda:"None"):
+    def decor(f):
+        def f2(*args, **kwargs):
+            return withFileCache(namef(*args, **kwargs), lambda: f(*args, **kwargs), expiry)
+        return f2
+    return decor
 
 
 ### HTTP Server
@@ -66,17 +74,26 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
         cli = self.client_address
         logging.debug(("%s:%s " + format) % (cli[0], cli[1], *args))
 
-    def sendHTML(self, html):
+    def send(self, status, mime, headers, body):
+
         gz = "gzip" in (self.headers["Accept-Encoding"] or "")
-        data = bytes(html, "utf-8")
-        if gz: data = gzip.compress(data)
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
+
+        if type(body) is str:
+            body = body.encode()
+        if gz:
+            body = gzip.compress(body)
+
+        self.send_response(status)
+
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header("Content-type", mime)
         if gz: self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+
         try:
-            self.wfile.write(data)
+            self.wfile.write(body)
         except BrokenPipeError:
             logging.warning("BrokenPipeError")
             return
@@ -85,173 +102,184 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
 
         parsed = urllib.parse.urlparse(self.path)
         paths  = [x for x in parsed.path.split("/") if x]
-        param  = { k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items() }.get
+        param  = { k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items() }
 
         try:
-            html = ""
-            err = b"400 Bad Request"
-            if len(paths) == 0:
-                s = SearchRanking(param("mode", "daily"), param("date", ""))
-                html = s.html(param("compact", 1))
-            elif len(paths) == 1:
-                if paths[0] == "ranking":
-                    s = SearchRanking(param("mode", "daily"), param("date", ""))
-                    html = s.html(param("compact", 1))
-                elif paths[0] == "search":
-                    s = Search(param("q", ""), param("bookmarks", 0), param("page", "1"), param("npages", 1))
-                    html = s.html(param("compact", 1))
-                elif paths[0] == "user":
-                    s = SearchUser(param("id", ""), param("bookmarks", 0))
-                    html = s.html(param("compact", 1))
-                elif paths[0] == "novel":
-                    if not (novelID := param("id")):
-                        err = b"400 Bad Request: missing id"
-                    else:
-                        f = Fetch(novelID)
-                        if savedir:
-                            f.save()
-                        html = f.html()
-            if html:
-                self.sendHTML(html)
-            else:
-                self.send_response(400)
-                self.send_header("Content-Length", str(len(err)))
-                self.end_headers()
-                self.wfile.write(err)
+            status, mime, headers, body = self.action(paths, param)
         except Exception as e:
             print(traceback.format_exc(), file=sys.stderr)
             logging.error("Error occured\n" + str(e))
+            status, mime, headers, body = 500, "text/plain", [], "500 Internal Server Error"
+
+        self.send(status, mime, headers, body)
+
+    def action(self, paths, param):
+        if len(paths) == 0:
+            return self.action(["pixiv", "ranking"], param)
+        elif len(paths) == 1:
+            return self.action(["pixiv"] + paths, param)
+        elif len(paths) == 2:
+            site, cmd = paths[0], paths[1]
+            # Select backend for site
+            backends = {
+                "pixiv": BackendPixiv,
+            }
+            try:
+                backend = backends[site]
+            except KeyError:
+                raise Exception(f"No such site: {site}")
+            # Select data generator function
+            try:
+                makeData = getattr(backend, cmd.title()) # e.g. BackendPixiv.Novel
+            except AttributeError:
+                raise Exception(f"No such cmd on site: {cmd} on {site}")
+            # Get data
+            data = makeData(**param).data() # e.g. BackendPixiv.Novel(**param).data() : viewNovelData
+            # Select view function
+            makeView = {
+                viewNovelData:  viewNovel,
+                viewSearchData: viewSearch,
+            }[type(data)]
+            # Render view
+            html = makeView(data) # e.g. viewNovel(data:viewNovelData) : str (html as a string)
+            # Save function
+            if savedir and (type(data) is viewNovelData):
+                saveFile(data.title,
+                         html,
+                         prefix=getRSign(data.rate),
+                         suffix=f" - {data.site} - {data.id}.html")
+            # Send response
+            status, mime, headers, body = 200, "text/html", [], html
+            return status, mime, headers, body
+        else:
+            raise Exception("No matching routing")
 
 
-### Search
+### Backend
 
-class Search():
+class BackendPixiv:
 
-    # Usage: print(Search("abc",10,1,1).html())
+    searchOptions = [
+        ("q", "query", str),
+    ]
 
-    def __init__(self, query, bookmarkCount, page, npages):
-        self._novels = []
+    class Search:
 
-        self._query = query
-        self._bookmarkCount = int(bookmarkCount)
-        self._page = int(page)
-        self._npages = int(npages)
+        def __init__(self, q, bookmarkCount=0, page=1, npages=1, compact=0, **_):
+            self._query         = q
+            self._bookmarkCount = int(bookmarkCount)
+            self._page          = int(page)
+            self._npages        = int(npages)
+            self._compact       = int(compact)
 
-        self._doSearch()
+        def data(self):
 
-    def _doSearch(self):
-        self._dataList = [
-            x for x in withFileCache(self._cacheName(), self._getDataList, 3600)
-            if int(x["bookmarkCount"]) >= self._bookmarkCount
-        ]
+            dataList = [
+                x for x in self._getDataList()
+                if int(x["bookmarkCount"]) >= self._bookmarkCount
+            ]
 
-    def _cacheName(self):
-        qenc = ''.join(hex(x)[2:] for x in self._query.encode())
-        return f"pixiv-search-{qenc}-{self._page}-{self._npages}"
+            items = [viewSearchDataItem(
+                title  = x["title"],
+                id     = x["id"],
+                tags   = [(y, mkurl('search', q=y)) for y in x["tags"]],
+                rate   = getRSign(x["xRestrict"]),
+                desc   = x["description"],
+                score  = x["bookmarkCount"],
+                length = x["textCount"],
+            ) for x in dataList]
 
-    def _getDataList(self):
-        dataList = []
-        for i in range(self._npages):
-            resJson = Resources.Pixiv.jsonSearch(self._query, i+self._page)
-            dataList += resJson["body"]["novel"]["data"]
-        return dataList
+            attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
 
-    def html(self, compact):
+            d = viewSearchData(
+                site   = "pixiv",
+                title  = self._html_title(),
+                query  = attr("_query", ""),
+                score  = attr("_bookmarkCount", 0),
+                page   = attr("_page", 0),
+                npages = attr("_npages", 0),
+                mode   = "compact" if self._compact else "detailed",
+                items  = items,
+                viewOption = viewSearchDataViewOption(
+                    htmlHeader = lambda: self._html_header(self._compact),
+                    htmlNav    = lambda: self._html_nav(self._compact),
+                )
+            )
 
-        items = [viewSearchDataItem(
-            title  = x["title"],
-            id     = x["id"],
-            tags   = [(y, mkurl('search', q=y)) for y in x["tags"]],
-            rate   = getRSign(x["xRestrict"]),
-            desc   = x["description"],
-            score  = x["bookmarkCount"],
-            length = x["textCount"],
-        ) for x in self._dataList]
+            return d
 
-        attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
+        def _getDataList(self):
+            dataList = []
+            for i in range(self._npages):
+                resJson = Resources.Pixiv.jsonSearch(self._query, i+self._page)
+                dataList += resJson["body"]["novel"]["data"]
+            return dataList
 
-        d = viewSearchData(
-            site   = "pixiv",
-            title  = self._html_title(),
-            query  = attr("_query", ""),
-            score  = attr("_bookmarkCount", 0),
-            page   = attr("_page", 0),
-            npages = attr("_npages", 0),
-            mode   = "compact" if (compact == "1") else "detailed",
-            items  = items,
-        )
+        def _html_title(self):
+            return f"Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}"
 
-        return viewSearch(d, lambda: self._html_header(compact == "1"), lambda: self._html_nav(compact == "1"))
+        def _html_header(self, compact):
+            return ""
 
-    def _html_title(self):
-        return f"Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}"
+        def _html_nav(self, compact):
+            # navigation links (on both top and bottom of page)
+            common = { "q": self._query, "npages": self._npages, "bookmarks": self._bookmarkCount }
+            hrefPrev   = mkurl("search", **common, page=max(1,self._page-self._npages), compact=compact)
+            hrefNext   = mkurl("search", **common, page=self._page+self._npages,        compact=compact)
+            hrefToggle = mkurl("search", **common, page=self._page,                     compact=int(not compact))
+            return f"""
+                <div id="nav" style="display: flex">
+                    <span style="flex: 1">
+                        <a href="{hrefToggle}">{compact and "詳細表示" or "コンパクト表示"}</a>
+                    </span>
+                    <span style="flex: 1"></span>
+                    <span style="flex: 1; text-align: right">
+                        <a href='{hrefPrev}'>前へ</a>
+                        <a href='{hrefNext}'>次へ</a>
+                    </span>
+                </div>
+            """
 
-    def _html_header(self, compact):
-        return ""
+    class User(Search):
 
-    def _html_nav(self, compact):
-        # navigation links (on both top and bottom of page)
-        common = { "q": self._query, "npages": self._npages, "bookmarks": self._bookmarkCount }
-        hrefPrev   = mkurl("search", **common, page=max(1,self._page-self._npages), compact=compact)
-        hrefNext   = mkurl("search", **common, page=self._page+self._npages,        compact=compact)
-        hrefToggle = mkurl("search", **common, page=self._page,                     compact=int(not compact))
-        return f"""<div id="nav" style="display: flex">
-<span style="flex: 1">
-<a href="{hrefToggle}">{compact and "詳細表示" or "コンパクト表示"}</a>
-</span>
-<span style="flex: 1"></span>
-<span style="flex: 1; text-align: right">
-<a href='{hrefPrev}'>前へ</a>
-<a href='{hrefNext}'>次へ</a>
-</span>
-</div>"""
+        def __init__(self, id, bookmarkCount=0, compact=0):
+            self._userID        = int(id)
+            self._bookmarkCount = int(bookmarkCount)
+            self._compact       = int(compact)
 
-class SearchUser(Search):
+        def _getDataList(self):
 
-    def __init__(self, userID, bookmarkCount):
-        self._novels = []
+            # First, response includes all novelIDs of user
+            json1 = Resources.Pixiv.jsonUserAll(self._userID)
+            novels = json1["body"]["novels"] # a dict or a empty list
+            if len(novels) == 0:
+                return []
+            novelIDs = list(novels.keys())
 
-        self._userID = userID
-        self._bookmarkCount = int(bookmarkCount)
+            # Next, get data for each novel (100 novels at once)
+            # So, 0 novel = 0 request, 1-100 novels = 1 request, 101-200 = 2 etc.
+            dataList = []
+            n = 100
+            numRequests = 1 + int((len(novelIDs)-1)/n)
+            for ids in [novelIDs[n*i:n*(i+1)] for i in range(numRequests)]:
+                json2 = Resources.Pixiv.jsonUserNovels(self._userID, ids)
+                dataList += list(json2["body"]["works"].values())
 
-        self._doSearch()
+            return dataList
 
-    def _cacheName(self):
-        return f"pixiv-user-{self._userID}"
+        def _html_title(self):
+            return f"Search {self._userID}"
 
-    def _getDataList(self):
+        def _html_header(self, compact):
+            return ""
 
-        # First, response includes all novelIDs of user
-        json1 = Resources.Pixiv.jsonUserAll(self._userID)
-        novels = json1["body"]["novels"] # a dict or a empty list
-        if len(novels) == 0:
-            return []
-        novelIDs = list(novels.keys())
+        def _html_nav(self, compact):
+            hrefToggle = mkurl("user", id=self._userID, compact=int(not compact))
+            return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
 
-        # Next, get data for each novel (100 novels at once)
-        # So, 0 novel = 0 request, 1-100 novels = 1 request, 101-200 = 2 etc.
-        dataList = []
-        n = 100
-        numRequests = 1 + int((len(novelIDs)-1)/n)
-        for ids in [novelIDs[n*i:n*(i+1)] for i in range(numRequests)]:
-            json2 = Resources.Pixiv.jsonUserNovels(self._userID, ids)
-            dataList += list(json2["body"]["works"].values())
+    class Ranking(Search):
 
-        return dataList
-
-    def _html_title(self):
-        return f"Search {self._userID}"
-
-    def _html_header(self, compact):
-        return ""
-
-    def _html_nav(self, compact):
-        hrefToggle = mkurl("user", id=self._userID, compact=int(not compact))
-        return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
-
-class SearchRanking(Search):
-
-    _modeNames = {
+        _modeNames = {
             "daily":           "デイリー",
             "weekly":          "ウィークリー",
             "monthly":         "マンスリー",
@@ -263,223 +291,198 @@ class SearchRanking(Search):
             "weekly_r18":      "ウィークリー R-18",
             "male_r18":        "男子に人気 R-18",
             "female_r18":      "女子に人気 R-18",
-            }
+        }
 
-    def __init__(self, mode, date):
-        self._novels = []
+        def __init__(self, mode="daily", date="", compact=0):
+            self._mode = mode
 
-        self._mode = mode
+            # set self._date to a date object (at most yesterday)
+            if re.match(r"\d\d\d\d-\d\d-\d\d", date):
+                d = datetime.date.fromisoformat(date)
+                y = yesterday()
+                self._date = d if d <= y else y
+            else:
+                self._date = yesterday()
 
-        # set self._date to a date object (at most yesterday)
-        if re.match(r"\d\d\d\d-\d\d-\d\d", date):
-            d = datetime.date.fromisoformat(date)
-            y = yesterday()
-            self._date = d if d <= y else y
-        else:
-            self._date = yesterday()
+            self._compact = compact
+            self._bookmarkCount = 0
 
-        self._bookmarkCount = 0
+        def _cacheName(self):
+            return f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}"
 
-        self._doSearch()
+        def _getDataList(self):
+            dataList = []
+            for page in [1, 2]:
+                res = Resources.Pixiv.rankingPhp(self._mode, self._date, page)
+                dataList += self._getDataListFromHTML(res)
+            return dataList
 
-    def _cacheName(self):
-        return f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}"
+        def _getDataListFromHTML(self, html):
+            data = []
+            current = None
+            def done():
+                nonlocal current, data
+                if current:
+                    data += [current]
+                current = {}
+            def setp(prop, val):
+                current[prop] = val
+            def onStart(match, attr):
+                if match("._ranking-item"):
+                    done()
+                    setp("xRestrict", "r18" in self._mode)
+                    setp("description", "") # some novels don't have description
+                elif match(".cover"):
+                    setp("title", re.sub(r"/.*", "", attr("alt")))
+                    setp("tags",  attr("data-tags").split())
+                    setp("id",    attr("data-id"))
+            def onData(match, data):
+                if match(".bookmark-count"):
+                    setp("bookmarkCount", int(re.sub(r"[^\d]", "", data) or 0))
+                elif match(".chars"):
+                    setp("textCount", re.sub(r"[^\d]", "", data))
+                elif match(".novel-caption"):
+                    setp("description", data)
 
-    def _getDataList(self):
-        # return self._getDataListFromHTML("".join(open("../r_daily","r").readlines()))
-        dataList = []
-        for page in [1, 2]:
-            res = Resources.Pixiv.rankingPhp(self._mode, self._date.isoformat(), page)
-            dataList += self._getDataListFromHTML(res)
-        return dataList
+            MyHTMLParser(onStart, onData).feed(html)
+            done()
+            # print(json.dumps([[x["title"]] for x in data], indent=2, sort_keys=True, ensure_ascii=False))
+            return data
 
-    def _getDataListFromHTML(self, html):
-        data = []
-        current = None
-        def done():
-            nonlocal current, data
-            if current:
-                data += [current]
-            current = {}
-        def setp(prop, val):
-            current[prop] = val
-        def onStart(match, attr):
-            if match("._ranking-item"):
-                done()
-                setp("xRestrict", "r18" in self._mode)
-                setp("description", "") # some novels don't have description
-            elif match(".cover"):
-                setp("title", re.sub(r"/.*", "", attr("alt")))
-                setp("tags",  attr("data-tags").split())
-                setp("id",    attr("data-id"))
-        def onData(match, data):
-            if match(".bookmark-count"):
-                setp("bookmarkCount", int(re.sub(r"[^\d]", "", data) or 0))
-            elif match(".chars"):
-                setp("textCount", re.sub(r"[^\d]", "", data))
-            elif match(".novel-caption"):
-                setp("description", data)
+        def _html_title(self):
+            return f"{self._modeNames[self._mode]} ランキング {self._date}"
 
-        MyHTMLParser(onStart, onData).feed(html)
-        done()
-        # print(json.dumps([[x["title"]] for x in data], indent=2, sort_keys=True, ensure_ascii=False))
-        return data
+        def _html_header(self, compact):
+            # links for other rankings
+            hrefBase = mkurl("ranking", compact=compact, date=self._date)
+            modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
+            if Resources.Pixiv.hasCookie():
+                modeLinks2 = "<span>R-18:</span>"
+                modeLinks2 += "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode].replace(" R-18", "")}</a>""" for mode in self._modeNames.keys() if "r18" in mode])
+            else:
+                modeLinks2 = "R-18 ランキングを見るには cookies.txt が必要です。"
+            modeLinksCSS = """
+                #ranking-modes { margin: .8em 0; font-size: small; line-height: 1.8 }
+                #ranking-modes a { margin-right: 1.4em }
+                #ranking-modes span { margin-right: 1.0em }
+                .ranking-selected { font-weight: bold }
+            """
+            modeLinks = f"""
+                <style>
+                    {modeLinksCSS}
+                </style>
+                <p id="ranking-modes">
+                    {modeLinks1}
+                    <br>
+                    {modeLinks2}
+                </p>"""
 
-    def _html_title(self):
-        return f"{self._modeNames[self._mode]} ランキング {self._date}"
+            # construct html
+            return f"""
+                {modeLinks}
+                <form style="text-align: center; margin: .5em 0" action=ranking>
+                    <label for="date">日付:</label>
+                    <input type="date" id="date" name="date" value="{self._date}" max="{yesterday()}">
+                    <input type="submit" value="{emoji['search']}">
+                    <input type="hidden" name="mode" value="{self._mode}">
+                    <input type="hidden" name="compact" value="{1 if compact else ''}">
+                </form>
+            """
 
-    def _html_header(self, compact):
-        # links for other rankings
-        hrefBase = mkurl("ranking", compact=compact, date=self._date)
-        modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
-        if Resources.Pixiv.hasCookie():
-            modeLinks2 = "<span>R-18:</span>"
-            modeLinks2 += "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode].replace(" R-18", "")}</a>""" for mode in self._modeNames.keys() if "r18" in mode])
-        else:
-            modeLinks2 = "R-18 ランキングを見るには cookies.txt が必要です。"
-        modeLinks = """<style>
-#ranking-modes { margin: .8em 0; font-size: small; line-height: 1.8 }
-#ranking-modes a { margin-right: 1.4em }
-#ranking-modes span { margin-right: 1.0em }
-.ranking-selected { font-weight: bold }
-</style>""" + f"""
-<p id="ranking-modes">
-{modeLinks1}
-<br>
-{modeLinks2}
-</p>"""
+        def _html_nav(self, compact):
+            hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
+            return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
 
-        # construct html
-        return f"""
-{modeLinks}
-<form style="text-align: center; margin: .5em 0" action=ranking>
-<label for="date">日付:</label>
-<input type="date" id="date" name="date" value="{self._date}" max="{yesterday()}">
-<input type="submit" value="{emoji['search']}">
-<input type="hidden" name="mode" value="{self._mode}">
-<input type="hidden" name="compact" value="{1 if compact else ''}">
-</form>"""
+    class Novel:
 
-    def _html_nav(self, compact):
-        hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
-        return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
+        def __init__(self, id):
+            self._novelID = id
 
+        def data(self):
+            html = Resources.Pixiv.showPhp(self._novelID)
+            jso  = self._extractData(html)
 
-### Fetch
+            o_content = jso["content"]
+            for (regex, replace) in [
+                    (r"$", "<br>"),
+                    (r"\[newpage\]", "<hr>\n"),
+                    (r"\[chapter:(.*?)\]", "<h2>\\1</h2>\n"),
+                    (r"\[\[rb:(.*?)(>|&gt;)(.*?)\]\]", "<ruby>\\1<rt>\\3</rt></ruby>"),
+                    ]:
+                o_content = re.sub(regex, replace, o_content, flags=re.MULTILINE)
 
-class Fetch():
+            # threshold on total embedded image size
+            # if total image size exceeds MAX_TOTAL_IMAGE_SIZE, return only link next time
+            MAX_TOTAL_IMAGE_SIZE  = 5 * 10**6 # 5 MBytes
+            currentTotalImageSize = 0 # 0 Byte
 
-    def __init__(self, novelID):
-        self._novelID = novelID
-        self._data = self._getData()
-        self._html = None
+            # pixivimage
+            def getPixivImg(imgId):
+                assert imgId.isdigit()
+                jso = Resources.Pixiv.artworkPagesJson(imgId)
+                url = jso["body"][0]["urls"]["original"]
+                return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.artworkImage(url)
 
-    def _getData(self):
-        data = withFileCache(
-            f"pixiv-showPhp-{self._novelID}",
-            lambda: self._extractData(Resources.Pixiv.showPhp(self._novelID)),
-            expiry=3*86400
-        )
-        return data
+            # uploadedimage
+            def getUploadedImg(imgId):
+                assert imgId.isdigit()
+                url = jso["textEmbeddedImages"][imgId]["urls"]["original"]
+                return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.uploadedImage(url)
 
-    def html(self):
-        if self._html: return self._html
+            # create image tag
+            def getImgTag(imgType:"Literal['uploadedimage', 'pixivimage']", imgId):
+                nonlocal currentTotalImageSize
+                url, img = (getPixivImg if imgType == "pixivimage" else getUploadedImg)(imgId)
+                if not img:
+                    return f"""<figure><a href="{url}">[{imgType}:{imgId}]</a></figure>"""
+                currentTotalImageSize += len(img)
+                imgB64 = base64.b64encode(img).decode("utf-8")
+                return f"""<figure><a href="{url}"><img src=\"data:image/png;base64,{imgB64}\" alt=\"[{imgType}:{imgId}]\" style=\"width: 100%\"></a></figure>"""
 
-        data = self._data
+            # replace image links
+            o_content = re.sub(r"\[(pixivimage|uploadedimage):(.*?)\]", lambda m: getImgTag(m.group(1), m.group(2)), o_content)
 
-        o_content = data["content"]
-        for (regex, replace) in [
-                (r"$", "<br>"),
-                (r"\[newpage\]", "<hr>\n"),
-                (r"\[chapter:(.*?)\]", "<h2>\\1</h2>\n"),
-                (r"\[\[rb:(.*?)(>|&gt;)(.*?)\]\]", "<ruby>\\1<rt>\\3</rt></ruby>"),
-                ]:
-            o_content = re.sub(regex, replace, o_content, flags=re.MULTILINE)
+            # colorize character names
+            if color:
+                o_content = CharaColor.colorHTML(o_content)
 
-        # threshold on total embedded image size
-        # if total image size exceeds MAX_TOTAL_IMAGE_SIZE, return only link next time
-        MAX_TOTAL_IMAGE_SIZE  = 5 * 10**6 # 5 MBytes
-        currentTotalImageSize = 0 # 0 Byte
+            tags = [(y, mkurl('search', q=y)) for y in [x["tag"] for x in jso["tags"]["tags"]]]
 
-        # pixivimage
-        def getPixivImg(imgId):
-            assert imgId.isdigit()
-            jso = Resources.Pixiv.artworkPagesJson(imgId)
-            url = jso["body"][0]["urls"]["original"]
-            return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.artworkImage(url)
+            # embed json
+            # e.g. <div data='{"x":10,"y":"あ"}'></div>
+            # jso1 = json.dumps(jso, ensure_ascii=False, separators=(',', ':'))
+            # for (fromStr, toStr) in [ # unnecessary if b64 is used
+            #         ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
+            #         ]:
+            #     jso1 = jso1.replace(fromStr, toStr)
+            # jso2 = gzip.compress(jso1.encode("utf-8"))
+            # jso3 = base64.b64encode(jso2).decode("utf-8")
 
-        # uploadedimage
-        def getUploadedImg(imgId):
-            assert imgId.isdigit()
-            url = data["textEmbeddedImages"][imgId]["urls"]["original"]
-            return url, (currentTotalImageSize < MAX_TOTAL_IMAGE_SIZE) and Resources.Pixiv.uploadedImage(url)
+            data = viewNovelData(
+                site  = "pixiv",
+                title = jso["title"],
+                id    = jso["id"],
+                rate  = getRSign(jso["xRestrict"]),
+                body  = o_content,
+                desc  = replaceLinks(jso["description"]),
+                tags  = tags,
+                orig  = f"https://www.pixiv.net/novel/show.php?id={jso['id']}",
+                user  = (jso["userId"], mkurl('user', id=jso["userId"])),
+                score = jso["bookmarkCount"],
+                date  = datetime.datetime.strptime(jso["createDate"][:10], "%Y-%m-%d"),
+            )
 
-        # create image tag
-        def getImgTag(imgType:"Literal['uploadedimage', 'pixivimage']", imgId):
-            nonlocal currentTotalImageSize
-            url, img = (getPixivImg if imgType == "pixivimage" else getUploadedImg)(imgId)
-            if not img:
-                return f"""<figure><a href="{url}">[{imgType}:{imgId}]</a></figure>"""
-            currentTotalImageSize += len(img)
-            imgB64 = base64.b64encode(img).decode("utf-8")
-            return f"""<figure><a href="{url}"><img src=\"data:image/png;base64,{imgB64}\" alt=\"[{imgType}:{imgId}]\" style=\"width: 100%\"></a></figure>"""
+            return data
 
-        # replace image links
-        o_content = re.sub(r"\[(pixivimage|uploadedimage):(.*?)\]", lambda m: getImgTag(m.group(1), m.group(2)), o_content)
+        def _extractData(self, html): # parse show.php and get json inside meta[name=preload-data]
+            # Extract json string
+            # querySelector("meta[name=meta-preload-data]").content
+            s = sfind(html, ["meta-preload-data\" content='", "'"])
+            s = unescape(s)
 
-        # colorize character names
-        if color:
-            o_content = CharaColor.colorHTML(o_content)
-
-        tags = [(y, mkurl('search', q=y)) for y in [x["tag"] for x in data["tags"]["tags"]]]
-
-        # embed json
-        # e.g. <div data='{"x":10,"y":"あ"}'></div>
-        # jso1 = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-        # for (fromStr, toStr) in [ # unnecessary if b64 is used
-        #         ("'", "&#39;"), # ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")
-        #         ]:
-        #     jso1 = jso1.replace(fromStr, toStr)
-        # jso2 = gzip.compress(jso1.encode("utf-8"))
-        # jso3 = base64.b64encode(jso2).decode("utf-8")
-
-        d = viewNovelData(
-            site  = "pixiv",
-            title = data["title"],
-            id    = data["id"],
-            rate  = getRSign(data["xRestrict"]),
-            body  = o_content,
-            desc  = replaceLinks(data["description"]),
-            tags  = tags,
-            orig  = f"https://www.pixiv.net/novel/show.php?id={data['id']}",
-            user  = (data["userId"], mkurl('user', id=data["userId"])),
-            score = data["bookmarkCount"],
-            date  = datetime.datetime.strptime(data["createDate"][:10], "%Y-%m-%d"),
-        )
-
-        self._html = viewNovel(d)
-
-        return self._html
-
-    def save(self): # Save to file (will return filename)
-        return saveFile(
-            self._data["title"],
-            self.html(),
-            prefix=getRSign(self._data["xRestrict"]),
-            suffix=f" - pixiv - {self._data['id']}.html")
-
-    def _extractData(self, html): # parse show.php and get json inside meta[name=preload-data]
-        # Extract json string
-        s = None
-        def onStart(match, attr):
-            nonlocal s
-            if attr("name") == "preload-data":
-                s = attr("content")
-        MyHTMLParser(onStart, lambda match, data: 0).feed(html)
-
-        # Extract part of json
-        json1 = json.loads(s)
-        return json1["novel"][list(json1["novel"].keys())[0]]
+            # Extract part of json
+            json1 = json.loads(s)
+            return json1["novel"][list(json1["novel"].keys())[0]]
 
 
 ### Views
@@ -559,6 +562,11 @@ class viewSearchDataItem:
     length: int
 
 @dataclasses.dataclass
+class viewSearchDataViewOption:
+    htmlHeader: str|Callable = ""
+    htmlNav:    str|Callable = ""
+
+@dataclasses.dataclass
 class viewSearchData:
     site:   str
     title:  str
@@ -569,8 +577,9 @@ class viewSearchData:
     npages: int
     mode:   Literal["detailed", "compact", "tiled"] # view mode
     items:  list[viewSearchDataItem]
+    viewOption: Optional[viewSearchDataViewOption] = None
 
-def viewSearch(d:viewSearchData, headerFunc, navFunc):
+def viewSearch(d:viewSearchData):
 
     def searchBar(query="", compact=False, bookmarks=0, npages=1):
         html = f"""
@@ -618,6 +627,10 @@ def viewSearch(d:viewSearchData, headerFunc, navFunc):
     # search bar
     o_searchBar = searchBar(query=d.query, compact=(d.mode == "compact"), bookmarks=d.score, npages=d.npages)
 
+    vo = d.viewOption
+    o_header = vo.htmlHeader if (type(vo.htmlHeader) is str) else vo.htmlHeader()
+    o_nav    = vo.htmlNav    if (type(vo.htmlNav)    is str) else vo.htmlNav()
+
     # final html
     o_html = f"""
         <!DOCTYPE html>
@@ -631,11 +644,11 @@ def viewSearch(d:viewSearchData, headerFunc, navFunc):
         <body>
             <h1>{d.title}</h1>
             {o_searchBar}
-            {headerFunc()}
+            {o_header}
             <hr>
-            {navFunc()}
+            {o_nav}
             <div id="main"> {novels} </div>
-            {navFunc()}
+            {o_nav}
         </body>
         </html>
     """
@@ -681,34 +694,36 @@ class Resources:
             return { "cookie": cls.cookie } if cls.hasCookie() else {}
 
         @classmethod
+        @fcache(3*86400, lambda cls, novelID: f"pixiv-showPhp-{novelID}")
         def showPhp(cls, novelID):
             url = f"https://www.pixiv.net/novel/show.php?id={novelID}"
             return httpGet(url, headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
-        def rankingPhp(cls, mode, date: str, page: int):
+        @fcache(3600, lambda cls, mode, date, page: f"pixiv-ranking-{mode}-{date.isoformat().replace('-', '')}-{page}")
+        def rankingPhp(cls, mode, date: datetime.date, page: int):
             # Check modes
             MODES = { "daily", "weekly", "monthly", "rookie", "weekly_original", "male", "female", "daily_r18", "weekly_r18", "male_r18", "female_r18", }
             if not mode in MODES:
                 raise Exception(f"Resources.Pixiv.rankingPhp: unknown mode {mode} (expected one of {MODES})")
             if (not cls.hasCookie()) and mode.endswith("r18"):
                 raise Exception(f"Resources.Pixiv.rankingPhp: cookie is needed to view ranking of mode {mode}")
-            # Check date
-            if not (isinstance(date, str) and re.match(r"\d\d\d\d-\d\d-\d\d", date)):
-                raise Exception(f"Resources.Pixiv.rankingPhp: invalid date {date} (should be YYYY-MM-DD as a str)")
             # Make URL
-            url = f"https://www.pixiv.net/novel/ranking.php?mode={mode}&date={date.replace('-', '')}"
+            dateiso = date.isoformat()
+            url = f"https://www.pixiv.net/novel/ranking.php?mode={mode}&date={dateiso.replace('-', '')}"
             if page > 1:
                 url += f"&page={page}"
             # Download
             return httpGet(url, headers=[cls._headers, (cls.cookieHeader() if mode.endswith("r18") else {})])
 
         @classmethod
+        @fcache(3600, lambda cls, userID: f"pixiv-user-{userID}")
         def jsonUserAll(cls, userID):
             url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?lang=ja"
             return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
+        @fcache(3600, lambda cls, userID, novelIDs: f"pixiv-user-{userID}-{sum(map(int, novelIDs))}")
         def jsonUserNovels(cls, userID, novelIDs):
             n = 100
             if len(novelIDs) <= 0:
@@ -720,6 +735,7 @@ class Resources:
             return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
+        @fcache(600, lambda cls, word, page: f"pixiv-search-{''.join(hex(x)[2:] for x in word.encode())}-{page}")
         def jsonSearch(cls, word, page):
             params = f"?word={word}&order=date_d&mode=all&p={page}&s_mode=s_tag&lang=ja"
             url = f"https://www.pixiv.net/ajax/search/novels/{word}{params}"
@@ -947,6 +963,7 @@ def withFileCache(name, getDefault, expiry=600):
     if not os.path.isdir(cachedir):
         os.makedirs(cachedir, exist_ok=True)
     file = cachedir + os.sep + name
+    # TODO avoid json encoding/decoding for strings and bytes
     def updateCache():
         value = getDefault()
         with open(file, "w") as f:
@@ -1012,8 +1029,14 @@ def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx
         desc = re.sub(regex, rep, desc)
     return desc
 
-def getRSign(xRestrict):
-    return ["", "R ", "G "][int(xRestrict)]
+def getRSign(spec):
+    "Get canonical rating sign"
+    mapping = {
+        0: "", "0": "", "": "",
+        1: "R ", "1": "R ", "r": "R ", "R": "R ", "R ": "R ",
+        2: "G ", "2": "G ", "g": "R ", "G": "R ", "G ": "R ",
+    }
+    return mapping[spec]
 
 def percentEncode(word):
     return urllib.parse.quote_plus(word, encoding="utf-8")
@@ -1095,6 +1118,13 @@ def saveFile(name, text, maxLenBytes=os.pathconf('/', 'PC_NAME_MAX'), prefix="",
     if not os.path.isdir(savedir): os.makedirs(savedir, exist_ok=True)
     with open(savedir + os.sep + outfile, "w") as f: f.write(text)
     return outfile
+
+def sfind(string:str, tokens:list[str]):
+    # find str
+    p1, nt1, p2, nt2 = 0, 0, 0, 0
+    for t in tokens:
+        p1, nt1, p2, nt2 = p2, nt2, string.find(t, p2 + nt2), len(t)
+    return string[p1+nt1:p2]
 
 
 ### test
