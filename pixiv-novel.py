@@ -322,34 +322,28 @@ class BackendPixiv:
 
         def _getDataListFromHTML(self, html):
             data = []
-            current = None
-            def done():
-                nonlocal current, data
-                if current:
-                    data += [current]
-                current = {}
-            def setp(prop, val):
-                current[prop] = val
-            def onStart(match, attr):
-                if match("._ranking-item"):
-                    done()
-                    setp("xRestrict", "r18" in self._mode)
-                    setp("description", "") # some novels don't have description
-                elif match(".cover"):
-                    setp("title", re.sub(r"/.*", "", attr("alt")))
-                    setp("tags",  attr("data-tags").split())
-                    setp("id",    attr("data-id"))
-            def onData(match, data):
-                if match(".bookmark-count"):
-                    setp("bookmarkCount", int(re.sub(r"[^\d]", "", data) or 0))
-                elif match(".chars"):
-                    setp("textCount", re.sub(r"[^\d]", "", data))
-                elif match(".novel-caption"):
-                    setp("description", data)
 
-            MyHTMLParser(onStart, onData).feed(html)
-            done()
-            # print(json.dumps([[x["title"]] for x in data], indent=2, sort_keys=True, ensure_ascii=False))
+            p = StringParser(html) # faster than html parser
+            toInt = lambda s: int(re.sub(r"\D+", "", s))
+            for _ in range(50):
+                d = {}
+                # one novel for each ._novel-item
+                if p.seek("_novel-item") == -1:
+                    break
+                d["xRestrict"]     = "r18" in self._mode
+                # attrs from img.cover
+                d["title"]         = re.sub(r"/.*", "", p.extract('alt="', '"'))
+                d["tags"]          = p.extract('data-tags="', '"').split()
+                d["id"]            = p.extract('data-id="', '"')
+                # innerHTML from div.chars
+                d["textCount"]     = toInt(p.extract('<div class="chars">', '文字</div>'))
+                # innerHTML from a.bookmark-count
+                d["bookmarkCount"] = toInt(p.extract('bookmark-count', '</i>', '</a>'))
+                # innerHTML from p.novel-caption
+                d["description"]   = unescape(p.extract('<p class="novel-caption">', '</p>', default="").strip())
+                # add entry to list
+                data.append(d)
+
             return data
 
         def _html_title(self):
@@ -992,34 +986,28 @@ def withFileCache(name, getDefault, expiry=600):
         logging.debug("cache new item " + name)
     return value
 
-class MyHTMLParser(html.parser.HTMLParser):
-    # Usage: MyHTMLParser(onStart, onData).feed(html)
-    # On each handle_starttag, onStart(match, attr) is called, where match(query) checks if the tag matches the CSS query, and attr(attrName) is like getAttribute(attrName)
-    # On each handle_data, onData(match, data) is called, where match(query) is the same above, and data is the same as in handle_data
-    def __init__(self, onStart, onData):
-        super().__init__()
-        self._stack = []
-        self._onStart = onStart
-        self._onData = onData
-    def _attr(self, attr):
-        if len(self._stack) == 0: return
-        for (k, v) in self._stack[-1]["attrs"]:
-            if k == attr:
-                return v
-    def _match(self, query):
-        if not re.match(r"^\.[^\s.]*$", query):
-            logging.error("Query must be like .CLASS")
-            return
-        return re.sub(r"\.", "", query) in (self._attr("class") or "").split()
-    def handle_starttag(self, tag, attrs):
-        self._stack.append({ "tag": tag, "attrs": attrs })
-        self._onStart(self._match, self._attr)
-        if tag in ["img"]:
-            self._stack.pop()
-    def handle_endtag(self, tag):
-        self._stack.pop()
-    def handle_data(self, data):
-        self._onData(self._match, data)
+class StringParser:
+
+    def __init__(self, string:str):
+        self.string = string
+        self.cursor = 0
+
+    def seek(self, sub:str):
+        "seek to the next substring sub."
+        ret = self.string.find(sub, self.cursor)
+        if ret == -1:
+            return -1
+        self.cursor = ret + len(sub)
+
+    def extract(self, *subs:str, default=None):
+        "find substrings from subs and return string between the last two. no seek."
+        p1, nt1, p2, nt2 = 0, 0, self.cursor, 0
+        for t in subs:
+            p1, nt1, p2, nt2 = p2, nt2, self.string.find(t, p2 + nt2), len(t)
+            if p2 == -1:
+                assert not (default is None), "matching failed and no default given"
+                return default
+        return self.string[p1+nt1:p2]
 
 def replaceLinks(desc, addTag=False): # replace novel/xxxxx links and user/xxxxx links
     f1 = lambda m: mkurl("user", id=m[1])
@@ -1138,25 +1126,35 @@ def test():
     import subprocess as sp, time, urllib.error as ue, urllib.parse as up, urllib.request as ur
     port = 8001
     proc = sp.Popen(["python", "pixiv-novel.py", "-p", str(port), "-c", ""])
+    fail = 0
 
-    def test(path): # test http status and response length
+    def test(path):
+        # test http status and response length
+        # if success, show time taken for request+response
+        # if success return 0, if fail return 1
         time.sleep(1)
+        t1 = datetime.datetime.now().timestamp()
         try:
             res = ur.urlopen(f"http://localhost:{port}{path}")
         except ue.HTTPError as e:
-            return print(f"FAIL {path}   ", e)
+            print(f"FAIL {path}   ", e)
+            return 1
         data = res.read()
+        t2 = datetime.datetime.now().timestamp()
         if len(data) < 1000:
-            return print(f"FAIL {path}   ", "response too short", len(data))
-        print(f"OK   {path}")
+            print(f"FAIL {path}   ", "response too short", len(data))
+            return 1
+        print(f"OK   {path}   {round(t2-t1,3)}s")
+        return 0
 
     try:
-        test("/")
-        test("/novel?id=15898879")
-        test("/search?q=" + up.quote("著作権フリー"))
-        test("/user?id=15370995")
+        fail += test("/")
+        fail += test("/novel?id=15898879")
+        fail += test("/search?q=" + up.quote("著作権フリー"))
+        fail += test("/user?id=15370995")
     finally:
         proc.kill()
+        exit(fail)
 
 
 ### Main
