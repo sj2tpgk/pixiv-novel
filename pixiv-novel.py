@@ -124,11 +124,8 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
         elif len(paths) == 2:
             site, cmd = paths[0], paths[1]
             # Select backend for site
-            backends = {
-                "pixiv": BackendPixiv,
-            }
             try:
-                backend = backends[site]
+                backend = BACKEND_TABLE[site]
             except KeyError:
                 raise Exception(f"No such site: {site}")
             # Select data generator function
@@ -139,10 +136,7 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
             # Get data
             data = makeData(**param).data() # e.g. BackendPixiv.Novel(**param).data() : viewNovelData
             # Select view function
-            makeView = {
-                viewNovelData:  viewNovel,
-                viewSearchData: viewSearch,
-            }[type(data)]
+            makeView = VIEW_TABLE[type(data)]
             # Render view
             html = makeView(data) # e.g. viewNovel(data:viewNovelData) : str (html as a string)
             # Save function
@@ -185,11 +179,12 @@ class BackendPixiv:
             items = [viewSearchDataItem(
                 title  = x["title"],
                 id     = x["id"],
-                tags   = [(y, mkurl('search', q=y)) for y in x["tags"]],
+                tags   = x["tags"],
                 rate   = getRSign(x["xRestrict"]),
                 desc   = x["description"],
                 score  = x["bookmarkCount"],
                 length = x["textCount"],
+                user   = (x["userId"], x["userName"])
             ) for x in dataList]
 
             attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
@@ -219,7 +214,7 @@ class BackendPixiv:
             return dataList
 
         def _html_title(self):
-            return f"Search {self._query}{(f' ({self._page})' if self._page > 1 else '')}"
+            return f""
 
         def _html_header(self, compact):
             return ""
@@ -271,7 +266,7 @@ class BackendPixiv:
             return dataList
 
         def _html_title(self):
-            return f"Search {self._userID}"
+            return f"User {self._userID}"
 
         def _html_header(self, compact):
             return ""
@@ -341,6 +336,9 @@ class BackendPixiv:
                 d["bookmarkCount"] = toInt(p.extract('bookmark-count', '</i>', '</a>'))
                 # innerHTML from p.novel-caption
                 d["description"]   = unescape(p.extract('<p class="novel-caption">', '</p>', default="").strip())
+                # attrs from a.user
+                d["userId"]        = p.extract('data-user_id="', '"')
+                d["userName"]      = p.extract('data-user_name="', '"')
                 # add entry to list
                 data.append(d)
 
@@ -443,7 +441,7 @@ class BackendPixiv:
             if not CONFIG["nocolor"]:
                 o_content = CharaColor.colorHTML(o_content)
 
-            tags = [(y, mkurl('search', q=y)) for y in [x["tag"] for x in jso["tags"]["tags"]]]
+            tags = [x["tag"] for x in jso["tags"]["tags"]]
 
             # embed json
             # e.g. <div data='{"x":10,"y":"あ"}'></div>
@@ -464,7 +462,7 @@ class BackendPixiv:
                 desc  = replaceLinks(jso["description"]),
                 tags  = tags,
                 orig  = f"https://www.pixiv.net/novel/show.php?id={jso['id']}",
-                user  = (jso["userId"], mkurl('user', id=jso["userId"])),
+                user  = (jso["userId"], jso["userId"]),
                 score = jso["bookmarkCount"],
                 date  = datetime.datetime.strptime(jso["createDate"][:10], "%Y-%m-%d"),
             )
@@ -481,8 +479,19 @@ class BackendPixiv:
             json1 = json.loads(s)
             return json1["novel"][list(json1["novel"].keys())[0]]
 
+BACKEND_TABLE = {
+    "pixiv": BackendPixiv,
+}
+
 
 ### Views
+
+@dataclasses.dataclass
+class viewNovelDataPage:
+    page:  int
+    title: str
+    id:    str
+    desc:  str
 
 @dataclasses.dataclass
 class viewNovelData:
@@ -492,11 +501,12 @@ class viewNovelData:
     rate:  Literal["", "R", "G"]
     body:  str
     desc:  str
-    tags:  list[tuple[str, str]] # list of (name, link)
+    tags:  list[str]
     orig:  str
-    user:  tuple[str, str] # (name, link)
+    user:  tuple[str, str] # (id, name) such that /<site>/user?id=<id> will work
     score: int
     date:  datetime.datetime
+    pages: Optional[list[viewNovelDataPage]] = None # For toc page (mokuji)
 
 def viewNovel(d:viewNovelData):
 
@@ -511,7 +521,7 @@ def viewNovel(d:viewNovelData):
         #data { display: none }
     """
 
-    o_tags = ",\n".join(f"<a href='{x[1]}'>{x[0]}</a>" for x in d.tags)
+    o_tags = ",\n".join(f"<a href='{mkurl(d.site, 'search', q=x)}'>{x}</a>" for x in d.tags)
 
     o_rSign = re.sub("^ *", " ", d.rate) if d.rate else ""
 
@@ -520,17 +530,33 @@ def viewNovel(d:viewNovelData):
         <p>
             <a href="{d.orig}">{d.site.capitalize()}で開く</a>
             ID:{d.id}
-            U:<a href="{d.user[1]}">{d.user[0]}</a>
+            U:<a href="{mkurl(d.site, 'user', id=d.user[0])}">{d.user[1]}</a>
             B:{d.score}
             D:{d.date.strftime("%Y-%m-%d")}
         </p>
+    """
+
+    nl = "\n"
+    o_toc = "" if not d.pages else f"""
+        <ul>
+            {nl.join(f'''
+                <li>
+                    <a href="{mkurl(d.site, 'novel', id=p.id, page=p.page)}">
+                        {p.page}
+                        {escape(p.title)}
+                    </a>
+                    <br>
+                    <div>{p.desc}</div>
+                </li>
+            ''' for p in d.pages)}
+        </ul>
     """
 
     o_html = f"""
         <!DOCTYPE html>
         <html lang="ja">
         <head>
-            <title>{o_rSign}{d.title}</title>
+            <title>{o_rSign}{d.title} - {d.site}</title>
             <meta http-equiv="content-type" content="text/html; charset=utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <!--<link rel="stylesheet" href="_style.css">-->
@@ -538,7 +564,10 @@ def viewNovel(d:viewNovelData):
         </head>
         <body>
             <h1>{d.title}</h1>
-            <div id="novel"> {d.body} </div>
+            <div id="novel">
+                {d.body}
+                {o_toc}
+            </div>
             <div id="info"> <p> {d.desc} </p> {o_info} </div>
         </body>
         </html>
@@ -552,11 +581,12 @@ def viewNovel(d:viewNovelData):
 class viewSearchDataItem:
     title:  str
     id:     str
-    tags:   list[tuple[str, str]] # name, url
+    tags:   list[str]
     rate:   Literal["", "R", "G"]
     desc:   str
     score:  int
     length: int
+    user:   tuple[str, str] # (id, name)
 
 @dataclasses.dataclass
 class viewSearchDataViewOption:
@@ -566,7 +596,7 @@ class viewSearchDataViewOption:
 @dataclasses.dataclass
 class viewSearchData:
     site:   str
-    title:  str
+    title:  str # if nonempty used as title
     query:  str
     score:  int # TODO: replace with generic filtering condition
     # filter: dict
@@ -604,6 +634,7 @@ def viewSearch(d:viewSearchData):
         body { max-width: 750px; margin: 1em auto; padding: 0 .5em; }
         #main { margin: 1em 0 }
         li p { margin: 1.5em 0 }
+        li > a.title { color: white }
         td:not(:nth-child(4)) { text-align: center; padding: 0 .35em }
         td:nth-child(4) { padding-left: 2em }
     """
@@ -611,35 +642,39 @@ def viewSearch(d:viewSearchData):
     # novels
     novels = "<table>" if d.mode == "compact" else "<ul>"
     for x in d.items: # self._novels
-        href = mkurl("novel", id=x.id)
+        href = mkurl(d.site, "novel", id=x.id)
         if d.mode == "compact":
             novels += f"<tr><td><a href=\"{href}\">{x.id}</a></td><td>{re.sub('^ *', ' ', x.rate) if x.rate else ''}</td><td>{x.score}</td><td>{x.title}</td></tr>\n"
         else:
             desc = "<br>".join(replaceLinks(x.desc).split("<br />")[0:5])
             desc = addMissingCloseTags(desc, tags=["b", "s", "u", "strong"])
-            tags = ", ".join([f"<a href=\"{y[1]}\">{y[0]}</a>" for y in x.tags])
+            tags = ", ".join([f"<a href=\"/{d.site}/search?q={escape(y)}\">{y}</a>" for y in x.tags])
             novels += f"<li>{x.title} ({x.length}字) <a href=\"{href}\">[{x.id}]</a><p>{desc}</p>{emoji['love']} {x.score}<br>{tags}</li><hr>\n"
     novels += "</table>" if d.mode == "compact" else "</ul>"
 
     # search bar
     o_searchBar = searchBar(query=d.query, compact=(d.mode == "compact"), bookmarks=d.score, npages=d.npages)
 
-    vo = d.viewOption
-    o_header = vo.htmlHeader if (type(vo.htmlHeader) is str) else vo.htmlHeader()
-    o_nav    = vo.htmlNav    if (type(vo.htmlNav)    is str) else vo.htmlNav()
+    if vo := d.viewOption:
+        o_header = vo.htmlHeader if (type(vo.htmlHeader) is str) else vo.htmlHeader()
+        o_nav    = vo.htmlNav    if (type(vo.htmlNav)    is str) else vo.htmlNav()
+    else:
+        o_header = o_nav = ""
+
+    o_title = d.title or f"{d.query}{(f' ({d.page})' if d.page > 1 else '')}"
 
     # final html
     o_html = f"""
         <!DOCTYPE html>
         <html lang="ja">
         <head>
-            <title>{d.title}</title>
+            <title>{o_title} - {d.site}</title>
             <meta http-equiv="content-type" content="text/html; charset=utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style> {css} </style>
         </head>
         <body>
-            <h1>{d.title}</h1>
+            <h1>{o_title}</h1>
             {o_searchBar}
             {o_header}
             <hr>
@@ -651,6 +686,11 @@ def viewSearch(d:viewSearchData):
     """
     o_html = "\n".join(x.strip() for x in o_html.splitlines())
     return o_html
+
+VIEW_TABLE = {
+    viewNovelData:  viewNovel,
+    viewSearchData: viewSearch,
+}
 
 
 ### Resources

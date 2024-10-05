@@ -1,3 +1,4 @@
 readme.html
 _cache/
 _save/
+__pycache__/
