@@ -1159,6 +1159,21 @@ def sfind(string:str, tokens:list[str]):
         p1, nt1, p2, nt2 = p2, nt2, string.find(t, p2 + nt2), len(t)
     return string[p1+nt1:p2]
 
+def loadPlugins(plugDir):
+    if not os.path.isdir(plugDir):
+        raise Exception(f"plugin directory {plugDir} does not exist")
+    import glob, importlib.util
+    logging.debug(f"Searching plugins in {plugDir}")
+    for plugFile in glob.glob("plugin-*.py", root_dir=plugDir):
+        logging.debug(f"Loaded plugin from {plugFile}")
+        module_name = plugFile[2:-3]
+        file_path = os.path.join(plugDir, plugFile)
+        # https://docs.python.org/3/library/importlib.html#importing-a-source-file-directly
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
 
 ### test
 
@@ -1212,6 +1227,7 @@ def main():
     A("-c", "--cachedir", metavar="DIR", default="_cache",   help="Cache directory" + D2)
     A("-d", "--download", metavar="URL",                     help="Download a novel and exit")
     A("-k", "--cookie",   default="cookies.txt",             help="Path of cookies.txt" + D2)
+    A("-l", "--plugdir",  metavar="DIR", default="",         help="Plugin directory" + D2)
     A("-p", "--port",     type=int, default=8080,            help="Port number" + D1)
     A("-s", "--savedir",  metavar="DIR", default="_save",    help="Auto save novels in this directory" + D2)
     A("-v", "--verbose",  action="store_true",               help="Verbose mode")
@@ -1231,6 +1247,9 @@ def main():
     CONFIG["noimage"]  = args.noimage
 
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(name)s:%(thread)d:%(message)s', level=logging.DEBUG if args.verbose else logging.ERROR)
+
+    if args.plugdir:
+        loadPlugins(args.plugdir)
 
     # Readme
     # - Check out: cool reader (android app)

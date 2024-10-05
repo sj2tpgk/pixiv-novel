@@ -2,3 +2,4 @@ readme.html
 _cache/
 _save/
 __pycache__/
+plugin-*.py
