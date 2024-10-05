@@ -127,12 +127,12 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
             try:
                 backend = BACKEND_TABLE[site]
             except KeyError:
-                raise Exception(f"No such site: {site}")
+                return 400, "text/plain", [], f"No such site: {site}"
             # Select data generator function
             try:
                 makeData = getattr(backend, cmd.title()) # e.g. BackendPixiv.Novel
             except AttributeError:
-                raise Exception(f"No such cmd on site: {cmd} on {site}")
+                return 400, "text/plain", [], f"No such cmd on site: {cmd} on {site}"
             # Get data
             data = makeData(**param).data() # e.g. BackendPixiv.Novel(**param).data() : viewNovelData
             # Select view function
@@ -149,7 +149,7 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
             status, mime, headers, body = 200, "text/html", [], html
             return status, mime, headers, body
         else:
-            raise Exception("No matching routing")
+            return 400, "text/plain", [], f"Invalid request"
 
 
 ### Backend
