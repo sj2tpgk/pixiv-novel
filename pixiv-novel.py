@@ -156,18 +156,14 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
 
 class BackendPixiv:
 
-    searchOptions = [
-        ("q", "query", str),
-    ]
-
     class Search:
 
-        def __init__(self, q, bookmarkCount=0, page=1, npages=1, compact=0, **_):
+        def __init__(self, q, bookmarkCount=0, page=1, npages=1, mode="detailed", **_):
             self._query         = q
             self._bookmarkCount = int(bookmarkCount)
-            self._page          = int(page)
-            self._npages        = int(npages)
-            self._compact       = int(compact)
+            self._page          = max(1, int(page))
+            self._npages        = min(1, max(3, int(npages)))
+            self._mode          = mode
 
         def data(self):
 
@@ -189,18 +185,27 @@ class BackendPixiv:
 
             attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
 
+            form = [
+                { "name": "q", "type": "text", "disp": 1, "field": "query", "args": { "placeholder": "search" } },
+                { "name": "bookmarkCount", "type": "number", "disp": 2, "label": f"{emoji['love']}:", "field": "score" },
+                { "name": "page", "type": "number", "disp": 2, "label": f"Page:", "field": "page", "args": { "min": 1 } },
+                { "name": "npages", "type": "select", "disp": 2, "args": [("1", "1 page"), ("2", "2 pages"), ("3", "3 pages")], "field": "npages" },
+                { "name": "mode", "type": "hidden", "disp": 2, "field": "mode" },
+            ]
+
             d = viewSearchData(
                 site   = "pixiv",
                 title  = self._html_title(),
                 query  = attr("_query", ""),
                 score  = attr("_bookmarkCount", 0),
-                page   = attr("_page", 0),
+                page   = attr("_page", 1),
                 npages = attr("_npages", 0),
-                mode   = "compact" if self._compact else "detailed",
+                mode   = self._mode,
                 items  = items,
+                form   = form,
                 viewOption = viewSearchDataViewOption(
-                    htmlHeader = lambda: self._html_header(self._compact),
-                    htmlNav    = lambda: self._html_nav(self._compact),
+                    htmlHeader = lambda: self._html_header(self._mode == "compact"),
+                    htmlPrevNextLinks = self._html_prevnext_links(),
                 )
             )
 
@@ -219,31 +224,14 @@ class BackendPixiv:
         def _html_header(self, compact):
             return ""
 
-        def _html_nav(self, compact):
-            # navigation links (on both top and bottom of page)
-            common = { "q": self._query, "npages": self._npages, "bookmarks": self._bookmarkCount }
-            hrefPrev   = mkurl("search", **common, page=max(1,self._page-self._npages), compact=compact)
-            hrefNext   = mkurl("search", **common, page=self._page+self._npages,        compact=compact)
-            hrefToggle = mkurl("search", **common, page=self._page,                     compact=int(not compact))
-            return f"""
-                <div id="nav" style="display: flex">
-                    <span style="flex: 1">
-                        <a href="{hrefToggle}">{compact and "詳細表示" or "コンパクト表示"}</a>
-                    </span>
-                    <span style="flex: 1"></span>
-                    <span style="flex: 1; text-align: right">
-                        <a href='{hrefPrev}'>前へ</a>
-                        <a href='{hrefNext}'>次へ</a>
-                    </span>
-                </div>
-            """
+        def _html_prevnext_links(self): return True
 
     class User(Search):
 
-        def __init__(self, id, bookmarkCount=0, compact=0):
+        def __init__(self, id, bookmarkCount=0, mode="detailed"):
             self._userID        = int(id)
             self._bookmarkCount = int(bookmarkCount)
-            self._compact       = int(compact)
+            self._mode          = mode
 
         def _getDataList(self):
 
@@ -271,9 +259,7 @@ class BackendPixiv:
         def _html_header(self, compact):
             return ""
 
-        def _html_nav(self, compact):
-            hrefToggle = mkurl("user", id=self._userID, compact=int(not compact))
-            return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
+        def _html_prevnext_links(self): return False
 
     class Ranking(Search):
 
@@ -291,8 +277,8 @@ class BackendPixiv:
             "female_r18":      "女子に人気 R-18",
         }
 
-        def __init__(self, mode="daily", date="", compact=0):
-            self._mode = mode
+        def __init__(self, kind="daily", date="", mode="detailed"):
+            self._kind = kind
 
             # set self._date to a date object (at most yesterday)
             if re.match(r"\d\d\d\d-\d\d-\d\d", date):
@@ -302,16 +288,16 @@ class BackendPixiv:
             else:
                 self._date = yesterday()
 
-            self._compact = compact
+            self._mode = mode
             self._bookmarkCount = 0
 
         def _cacheName(self):
-            return f"pixiv-ranking-{self._mode}-{self._date.isoformat().replace('-', '')}"
+            return f"pixiv-ranking-{self._kind}-{self._date.isoformat().replace('-', '')}"
 
         def _getDataList(self):
             dataList = []
             for page in [1, 2]:
-                res = Resources.Pixiv.rankingPhp(self._mode, self._date, page)
+                res = Resources.Pixiv.rankingPhp(self._kind, self._date, page)
                 dataList += self._getDataListFromHTML(res)
             return dataList
 
@@ -325,7 +311,7 @@ class BackendPixiv:
                 # one novel for each ._novel-item
                 if p.seek("_novel-item") == -1:
                     break
-                d["xRestrict"]     = "r18" in self._mode
+                d["xRestrict"]     = "r18" in self._kind
                 # attrs from img.cover
                 d["title"]         = re.sub(r"/.*", "", p.extract('alt="', '"'))
                 d["tags"]          = p.extract('data-tags="', '"').split()
@@ -345,15 +331,15 @@ class BackendPixiv:
             return data
 
         def _html_title(self):
-            return f"{self._modeNames[self._mode]} ランキング {self._date}"
+            return f"{self._modeNames[self._kind]} ランキング {self._date}"
 
         def _html_header(self, compact):
             # links for other rankings
-            hrefBase = mkurl("ranking", compact=compact, date=self._date)
-            modeLinks1 = "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode]}</a>""" for mode in self._modeNames.keys() if not "r18" in mode])
+            hrefBase = mkurl("ranking", mode="compact" if compact else "detailed", date=self._date)
+            modeLinks1 = "\n".join([f"""<a href="{hrefBase}&kind={kind}"{ ' class="ranking-selected"' if kind == self._kind else ""}>{self._modeNames[kind]}</a>""" for kind in self._modeNames.keys() if not "r18" in kind])
             if Resources.Pixiv.hasCookie():
                 modeLinks2 = "<span>R-18:</span>"
-                modeLinks2 += "\n".join([f"""<a href="{hrefBase}&mode={mode}"{ ' class="ranking-selected"' if mode == self._mode else ""}>{self._modeNames[mode].replace(" R-18", "")}</a>""" for mode in self._modeNames.keys() if "r18" in mode])
+                modeLinks2 += "\n".join([f"""<a href="{hrefBase}&kind={kind}"{ ' class="ranking-selected"' if kind == self._kind else ""}>{self._modeNames[kind].replace(" R-18", "")}</a>""" for kind in self._modeNames.keys() if "r18" in kind])
             else:
                 modeLinks2 = "R-18 ランキングを見るには cookies.txt が必要です。"
             modeLinksCSS = """
@@ -379,14 +365,12 @@ class BackendPixiv:
                     <label for="date">日付:</label>
                     <input type="date" id="date" name="date" value="{self._date}" max="{yesterday()}">
                     <input type="submit" value="{emoji['search']}">
-                    <input type="hidden" name="mode" value="{self._mode}">
-                    <input type="hidden" name="compact" value="{1 if compact else ''}">
+                    <input type="hidden" name="kind" value="{self._kind}">
+                    <input type="hidden" name="mode" value="{1 if compact else ''}">
                 </form>
             """
 
-        def _html_nav(self, compact):
-            hrefToggle = mkurl("ranking", q=self._mode, compact=int(not compact), date=self._date)
-            return f"<a href='{hrefToggle}'>{compact and '詳細表示' or 'コンパクト表示'}</a>"
+        def _html_prevnext_links(self): return False
 
     class Novel:
 
@@ -462,7 +446,7 @@ class BackendPixiv:
                 desc  = replaceLinks(jso["description"]),
                 tags  = tags,
                 orig  = f"https://www.pixiv.net/novel/show.php?id={jso['id']}",
-                user  = (jso["userId"], jso["userId"]),
+                user  = (jso["userId"], jso["userName"]),
                 score = jso["bookmarkCount"],
                 date  = datetime.datetime.strptime(jso["createDate"][:10], "%Y-%m-%d"),
             )
@@ -492,6 +476,7 @@ class viewNovelDataPage:
     title: str
     id:    str
     desc:  str
+    date:  datetime.datetime
 
 @dataclasses.dataclass
 class viewNovelData:
@@ -530,7 +515,7 @@ def viewNovel(d:viewNovelData):
         <p>
             <a href="{d.orig}">{d.site.capitalize()}で開く</a>
             ID:{d.id}
-            U:<a href="{mkurl(d.site, 'user', id=d.user[0])}">{d.user[1]}</a>
+            U:<a href="{mkurl(d.site, 'user', id=d.user[0])}">{d.user[0]}</a>
             B:{d.score}
             D:{d.date.strftime("%Y-%m-%d")}
         </p>
@@ -541,8 +526,8 @@ def viewNovel(d:viewNovelData):
         <ul>
             {nl.join(f'''
                 <li>
+                    <span style="display:none">{p.page}</span>
                     <a href="{mkurl(d.site, 'novel', id=p.id, page=p.page)}">
-                        {p.page}
                         {escape(p.title)}
                     </a>
                     <br>
@@ -590,8 +575,8 @@ class viewSearchDataItem:
 
 @dataclasses.dataclass
 class viewSearchDataViewOption:
-    htmlHeader: str|Callable = ""
-    htmlNav:    str|Callable = ""
+    htmlHeader: Callable = lambda: ""
+    htmlPrevNextLinks: bool = True
 
 @dataclasses.dataclass
 class viewSearchData:
@@ -604,28 +589,76 @@ class viewSearchData:
     npages: int
     mode:   Literal["detailed", "compact", "tiled"] # view mode
     items:  list[viewSearchDataItem]
+    form:   list = dataclasses.field(default_factory=lambda: [])
     viewOption: Optional[viewSearchDataViewOption] = None
 
 def viewSearch(d:viewSearchData):
 
-    def searchBar(query="", compact=False, bookmarks=0, npages=1):
+    # create form from a specification and default values
+    def makeForm(formSpec, values, action):
+        elems1, elems2 = [], []
+        for x in formSpec:
+            if x["type"] == "text":
+                elem = f'<input type=text name="{x["name"]}" value="{values[x["name"]]}" placeholder="{x.get("args", {}).get("placeholder", 0)}">'
+            elif x["type"] == "number":
+                elem = f'<input type=number name="{x["name"]}" value="{values[x["name"]]}" size=3 min="{x.get("args", {}).get("min", 0)}">'
+            elif x["type"] == "hidden":
+                elem = f'<input type=hidden name="{x["name"]}" value="{values[x["name"]]}">'
+            elif x["type"] == "select":
+                elem = f'<select name="{x["name"]}">\n'
+                for value, text in x["args"]:
+                    selected = "selected" if value == values[x["name"]] else ""
+                    elem += f'<option value="{value}" {selected}>{text}</option>\n'
+                elem += "</select>"
+            else:
+                assert False, f'Invalid formSpec: {x}'
+            if x.get("label"):
+                elem = f'<label>{x["label"]}{elem}</label>'
+            if   x["disp"] == 1: elems1.append(elem)
+            elif x["disp"] == 2: elems2.append(elem)
+        nl = "\n"
         html = f"""
-            <form style="text-align: right; line-height: 1.5" action=search>
-                <input type="text" name="q" placeholder="検索" value="{query}">
-                <input type="submit" value="{emoji['search']}">
-                <input type="hidden" name="compact" value="{1 if compact else ''}">
-        """
-        html += f"""
-                <br>
-                <select name="npages">
-                <option value="1"{" selected" if npages == 1 else ""}>1ページずつ
-                <option value="2"{" selected" if npages == 2 else ""}>2ページずつ
-                <option value="3"{" selected" if npages == 3 else ""}>3ページずつ
-                </select>
-                {emoji['love']}:<input type="text" name="bookmarks" value="{bookmarks}" size="3">
-        """ if query else ""
-        html += f"""
+            <form style="text-align: right; line-height: 1.5" action="{action}">
+                <details title="detailed search" style="display: inline">
+                    <summary>
+                        ...&nbsp;&nbsp;
+                        {nl.join(elems1)}
+                        <input type=submit value="{emoji["search"]}" title="search">
+                    </summary>
+                    {nl.join(elems2)}
+                </details>
             </form>
+        """
+        return html
+
+    # search bar
+    def searchBar():
+        values = { x["name"]: getattr(d, x["field"], x.get("default", "")) for x in d.form }
+        action = f"/{d.site}/search"
+        return makeForm(d.form, values, action)
+
+    # links (next/prev, toggle compact)
+    def navLinks():
+        values = { x["name"]: getattr(d, x["field"], x.get("default", "")) for x in d.form }
+        hrefPrev   = mkurl(**{ **values, "page": max(1, d.page-d.npages) })
+        hrefNext   = mkurl(**{ **values, "page": d.page+d.npages })
+        hrefToggle = mkurl(**{ **values, "mode": "detailed" if d.mode == "compact" else "compact" })
+        html = f"""
+            <div id="nav" style="display: flex">
+                <span style="flex: 1">
+                    <a href="{hrefToggle}">{"詳細表示" if d.mode == "compact" else "コンパクト表示"}</a>
+                </span>
+                <span style="flex: 1"></span>
+        """
+        if d.viewOption and d.viewOption.htmlPrevNextLinks:
+            html += f"""
+                <span style="flex: 1; text-align: right">
+                    <a href='{hrefPrev}'>前へ</a>
+                    <a href='{hrefNext}'>次へ</a>
+                </span>
+            """
+        html += """
+            </div>
         """
         return html
 
@@ -653,13 +686,11 @@ def viewSearch(d:viewSearchData):
     novels += "</table>" if d.mode == "compact" else "</ul>"
 
     # search bar
-    o_searchBar = searchBar(query=d.query, compact=(d.mode == "compact"), bookmarks=d.score, npages=d.npages)
+    o_searchBar = searchBar()
 
-    if vo := d.viewOption:
-        o_header = vo.htmlHeader if (type(vo.htmlHeader) is str) else vo.htmlHeader()
-        o_nav    = vo.htmlNav    if (type(vo.htmlNav)    is str) else vo.htmlNav()
-    else:
-        o_header = o_nav = ""
+    o_header = d.viewOption.htmlHeader() if d.viewOption else ""
+
+    o_nav = navLinks()
 
     o_title = d.title or f"{d.query}{(f' ({d.page})' if d.page > 1 else '')}"
 
@@ -1074,7 +1105,7 @@ def percentEncode(word):
     return urllib.parse.quote_plus(word, encoding="utf-8")
 
 def mkurl(*args, **kwargs):
-    return "/" + "/".join(percentEncode(str(v)) for v in args if v) + ("?" if kwargs else "") + "&".join(f"{k}={percentEncode(str(v))}" for k, v in kwargs.items() if v)
+    return ("/" if len(args) else "") + "/".join(percentEncode(str(v)) for v in args if v) + ("?" if kwargs else "") + "&".join(f"{k}={percentEncode(str(v))}" for k, v in kwargs.items() if v)
 
 def addMissingCloseTags(html, tags=["b", "s", "u", "strong"]):
 
