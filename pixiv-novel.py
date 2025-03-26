@@ -378,8 +378,7 @@ class BackendPixiv:
             self._novelID = id
 
         def data(self):
-            html = Resources.Pixiv.showPhp(self._novelID)
-            jso  = self._extractData(html)
+            jso  = Resources.Pixiv.novelJson(self._novelID)["body"]
 
             o_content = jso["content"]
             for (regex, replace) in [
@@ -762,10 +761,10 @@ class Resources:
             return { "cookie": cls.cookie } if cls.hasCookie() else {}
 
         @classmethod
-        @fcache(3*86400, lambda cls, novelID: f"pixiv-showPhp-{novelID}")
-        def showPhp(cls, novelID):
-            url = f"https://www.pixiv.net/novel/show.php?id={novelID}"
-            return httpGet(url, headers=[cls._headers, cls.cookieHeader()])
+        @fcache(3*86400, lambda cls, novelID: f"pixiv-novelJson-{novelID}")
+        def novelJson(cls, novelID):
+            url = f"https://www.pixiv.net/ajax/novel/{novelID}?lang=ja"
+            return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
         @fcache(3600, lambda cls, mode, date, page: f"pixiv-ranking-{mode}-{date.isoformat().replace('-', '')}-{page}")
