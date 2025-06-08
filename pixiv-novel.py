@@ -786,7 +786,7 @@ class Resources:
         @classmethod
         @fcache(3600, lambda cls, userID: f"pixiv-user-{userID}")
         def jsonUserAll(cls, userID):
-            url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?lang=ja"
+            url = f"https://www.pixiv.net/ajax/user/{userID}/profile/all?full=1&lang=ja"
             return httpGet(url, fmt="json", headers=[cls._headers, cls.cookieHeader()])
 
         @classmethod
