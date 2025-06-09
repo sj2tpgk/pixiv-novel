@@ -750,11 +750,11 @@ class Resources:
         }
 
         # cookie = readCookiestxtAsHTTPCookieHeader("../cookies.txt", "pixiv.net")
-        cookie = None
+        cookie = ""
 
         @classmethod
         def hasCookie(cls):
-            return bool(cls.cookie)
+            return len(cls.cookie) > 0
 
         @classmethod
         def cookieHeader(cls):
@@ -1129,7 +1129,7 @@ def addMissingCloseTags(html, tags=["b", "s", "u", "strong"]):
 
     return html
 
-def readCookiestxtAsHTTPCookieHeader(cookiestxt, domain):
+def readCookiestxtAsHTTPCookieHeader(cookiestxt:str, domain:str) -> str:
     # Read Netscape HTTP Cookie File and return string for urllib request header
     #   urllib.request.Request(url, headers={"Cookie": ...})
     # Only matching domains will be extracted (if domain=="a.com" then www.a.com, .a.com etc will match)
@@ -1147,12 +1147,16 @@ def readCookiestxtAsHTTPCookieHeader(cookiestxt, domain):
                 if len(fields) == 7 and (not domain or fields[0].find(domain) != -1):
                     results += [ f"{fields[5]}={fields[6]}" ]
 
+            if len(results) == 0:
+                logging.warning("Found no entry for domain {domain} in cookies.txt; R-18 search results will be omitted!")
+                return ""
+
             logging.info(f"Loaded {len(results)} cookies for {domain} from {cookiestxt}")
             return "; ".join(results) # something like "name=val; name=val"
 
     except OSError as e:
         logging.warning("Could not read cookies.txt; R-18 search results will be omitted!")
-        return False
+        return ""
 
 def openInBrowser(url):
     if shutil.which("termux-open-url"):
@@ -1207,13 +1211,17 @@ def loadPlugins(plugDir):
 
 ### test
 
-def test():
+def test(cookie:str) -> None:
+    if not os.path.exists(cookie):
+        print("Please specify a valid cookies.txt")
+        exit(1)
+
     import subprocess as sp, time, urllib.error as ue, urllib.parse as up, urllib.request as ur
     port = 8001
-    proc = sp.Popen(["python", "pixiv-novel.py", "-p", str(port), "-c", ""])
+    proc = sp.Popen(["python", "pixiv-novel.py", "-p", str(port), "-c", "", "-k", cookie])
     fail = 0
 
-    def test(path):
+    def test(path:str, rx:str="") -> int:
         # test http status and response length
         # if success, show time taken for request+response
         # if success return 0, if fail return 1
@@ -1229,6 +1237,9 @@ def test():
         if len(data) < 1000:
             print(f"FAIL {path}   ", "response too short", len(data))
             return 1
+        if rx and (not re.search(rx, data.decode())):
+            print(f"FAIL {path}   ", "response does not satisfy regex")
+            return 1
         print(f"OK   {path}   {round(t2-t1,3)}s")
         return 0
 
@@ -1236,10 +1247,11 @@ def test():
         fail += test("/")
         fail += test("/novel?id=15898879")
         fail += test("/search?q=" + up.quote("著作権フリー"))
-        fail += test("/user?id=15370995")
+        fail += test("/user?id=15370995", r"\b14740676\b") # r-18 user result
+        fail += test("/search?q=" + up.quote("R-18 オリジナル 著作権フリー 短編小説 百合"), r"\b14740676\b") # r-18 search result
     finally:
         proc.kill()
-        exit(fail)
+        exit(1 if fail > 0 else 0)
 
 
 ### Main
@@ -1300,11 +1312,14 @@ def main():
     # Try read cookies.txt
     # To obtain cookies.txt, use https://addons.mozilla.org/ja/firefox/addon/cookies-txt/ or https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid or type document.cookie in devtool
     if args.cookie:
-        Resources.Pixiv.cookie = readCookiestxtAsHTTPCookieHeader(args.cookie, "pixiv.net")
+        if cookie := readCookiestxtAsHTTPCookieHeader(args.cookie, "pixiv.net"):
+            Resources.Pixiv.cookie = cookie
+        else:
+            raise Exception(f"Could not read valid cookies from {args.cookie}")
 
     # Test code
     if args.test:
-        test()
+        test(args.cookie)
         quit()
 
     # Check HTTPS support
