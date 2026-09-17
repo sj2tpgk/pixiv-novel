@@ -6,6 +6,7 @@ import colorsys
 import dataclasses
 import datetime
 import gzip
+import hashlib
 import html.parser
 import http.server
 import json
@@ -119,7 +120,7 @@ class MyRequestHandler(http.server.BaseHTTPRequestHandler):
     def action(self, paths, param):
         if len(paths) == 0:
             return self.action(["pixiv", "ranking"], param)
-        elif len(paths) == 1:
+        elif len(paths) == 1 and paths[0] in ["ranking", "user", "search", "novel"]:
             return self.action(["pixiv"] + paths, param)
         elif len(paths) == 2:
             site, cmd = paths[0], paths[1]
@@ -462,8 +463,234 @@ class BackendPixiv:
             json1 = json.loads(s)
             return json1["novel"][list(json1["novel"].keys())[0]]
 
+class BackendHameln:
+
+    class Search:
+
+        def __init__(self, q, page=1, rate="N", mode="detailed"):
+            self.q        = q
+            self.page     = max(1, int(page))
+            self._mode    = mode
+            self._rate    = rate
+
+        def data(self):
+
+            html  = ResourceHameln.search(self.q, self.page, self._rate)
+            items = self._extract(html)
+            form  = [
+                { "name": "rate", "type": "select", "disp": 1, "label": f"", "field": "rate", "args": [("N", "通常"), ("R", "R-18"), ("T", "チラシの裏")] },
+                { "name": "q", "type": "text", "disp": 1, "field": "query", "args": { "placeholder": "search" } },
+                { "name": "page", "type": "number", "disp": 2, "label": f"Page:", "field": "page", "args": { "min": 1 } },
+                { "name": "mode", "type": "hidden", "disp": 2, "field": "mode" },
+            ]
+            return viewSearchData(
+                site   = "hameln",
+                title  = "",
+                query  = self.q,
+                score  = 0,
+                page   = self.page,
+                npages = 1,
+                mode   = self._mode,
+                rate   = self._rate,
+                items  = items,
+                form   = form,
+                viewOption = viewSearchDataViewOption(
+                    htmlHeader = lambda: "",
+                    htmlPrevNextLinks = True,
+                ),
+            )
+
+        def _extract(self, html):
+            p = StringParser(html)
+            if -1 == p.seek('<br><div class="novelnavi"><ul>'):
+                return []
+            l = []
+            while -1 != p.seek('<h3>'):
+                title = p.extract('class="search_novel_title">', '</a>', default="")
+                if not title: break
+                d = viewSearchDataItem(
+                    title  = title,
+                    id     = p.extract('syosetu.org/novel/', '/'),
+                    tags   = [],
+                    rate   = "",
+                    desc   = p.extract('toggle_container hidden">\n<p>', '</p>').replace("▼", "<br>"),
+                    score  = int(re.sub(r"[^\d]+", "", p.extract('お気に入り：', '／'))),
+                    length = int(re.sub(r"[^\d]+", "", p.extract('合計：', '字'))),
+                    user   = ("", "")
+                )
+                gensaku = re.search(r"<a [^>]+>([^<]+)</a>", p.extract('<p>原作：', '</p>'))[1]
+                tagsHtml = p.extract('>タグ：', '</p>')
+                d.tags = [gensaku] + re.findall(r"<a [^>]+>([^<]+)</a>", tagsHtml) # innerHTML of <a> tags
+                userHtml = p.extract('<p>作者：', '</p>')
+                if m := re.match(r'.*?/user/([0-9]+)/">(.*?)</a>', userHtml):
+                    d.user = (m[1], m[2])
+                l.append(d)
+            return l
+
+    class Ranking:
+
+        def __init__(self, kind):
+            self.kind = kind
+
+        def data(self): assert 0, "Not implemented"
+
+    class User:
+
+        def __init__(self, id):
+            self._id = int(id)
+
+        def data(self):
+            items = []
+            for page in range(1, 100):
+                try:
+                    items1 = self._extract(ResourceHameln.user(self._id, page))
+                    if len(items1) == 0: break
+                    items += items1
+                except Exception as e:
+                    logging.error(f"BackendHameln.User: error when extracting data: {e}")
+                    break
+            form  = [
+                { "name": "q", "type": "text", "disp": 1, "field": "query", "args": { "placeholder": "search" } },
+                { "name": "page", "type": "number", "disp": 2, "label": f"Page:", "field": "page", "args": { "min": 1 } },
+                { "name": "mode", "type": "hidden", "disp": 2, "field": "mode" },
+            ]
+            return viewSearchData(
+                site   = "hameln",
+                title  = f"User {self._id}",
+                query  = str(self._id),
+                score  = 0,
+                page   = 0,
+                npages = 1,
+                mode   = "detailed",
+                items  = items,
+                form   = form,
+                viewOption = viewSearchDataViewOption(
+                    htmlHeader = lambda: "",
+                    htmlPrevNextLinks = True,
+                ),
+            )
+
+        def _extract(self, html):
+            l = []
+            p = StringParser(html)
+            userName = re.sub(r"<title>(.*)の投稿小説一覧.*", r"\1", p.extract('<title>', '</title>', default=""))
+            while -1 != p.seek('<div class="section3">'):
+                title = p.extract('<a ', '>', '</a>', default="")
+                if not title: break
+                d = viewSearchDataItem(
+                    title  = title,
+                    id     = p.extract('syosetu.org/novel/', '/'),
+                    tags   = [],
+                    rate   = "",
+                    desc   = p.extract('<p>', '</p>').replace("▼", "<br>"),
+                    score  = 0,
+                    length = 0,
+                    user   = (str(self._id), userName)
+                )
+                gensaku = 'a'
+                gensaku = re.sub(r"<a [^>]+>", "", p.extract('(原作：', '</a>'))
+                tagsHtml = p.extract('<hr class="separator">', '<BR>')
+                d.tags = [gensaku] + re.findall(r"<a [^>]+>([^<]+)</a>", tagsHtml)
+                d.length = int(re.sub(r"[^\d]+", "", p.extract('話数：', '話'))) * int(re.sub(r"[^\d]+", "", p.extract('1話平均：', '文字')))
+                l.append(d)
+            return l
+
+    class Novel:
+
+        def __init__(self, id, page=0):
+            self.id   = int(id)
+            self.page = int(page)
+
+        def data(self):
+            html  = ResourceHameln.novel(self.id, self.page)
+            htmlDetail = ResourceHameln.novelDetail(self.id)
+            d1 = self._extractDetail(htmlDetail)
+            if self._isToc(html):
+                d2 = self._extractToc(html, self.id)
+                d1.pages = d2["pages"]
+                d1.body  = d2["body"]
+                return d1
+            else:
+                d1.body = self._extractNormal(html)["body"]
+                return d1
+
+        def _isToc(self, html:str):
+            # check page==0 and there is a table containing toc
+            return (self.page == 0) and (-1 != html.find('<ul class="entry">'))
+
+        @classmethod
+        def _extractToc(cls, html, id):
+            p = StringParser(html)
+            pages = []
+            tocHtml = p.extract('<ul class="entry">', '</ul>')
+            removeHtmlTagsSimple = lambda s: re.sub(r"<.*?>", "", s)
+            for m in re.finditer(r'<li><a href="./(\d+).html".*?</span>(.*?)<br>.*?>(\d\d\d\d/\d\d/\d\d \d\d:\d\d).*?</li>', tocHtml):
+                pages.append(viewNovelDataPage(
+                    page  = int(m[1]),
+                    title = removeHtmlTagsSimple(m[2]),
+                    id    = id,
+                    desc  = "",
+                    date  = datetime.datetime.strptime(m[3], "%Y/%m/%d %H:%M"),
+                ))
+            assert -1 != p.seek('<div id="entry_box">')
+            body = p.extract('<br><br>', '\n')
+            return {
+                "pages": pages,
+                "body": body,
+            }
+
+        @classmethod
+        def _extractDetail(cls, html):
+            p = StringParser(html)
+
+            assert -1 != p.seek('class="intro"')
+
+            userHtml = p.extract('作：', '<br>', default="")
+
+            assert -1 != p.seek('class="table1"')
+
+            titleHtml  = p.extract('>作品名</td><td>', '</a>')
+            titleMatch = re.search(r'href="(https://syosetu.org/novel/(\d+))">(.*)', titleHtml)
+
+            d = viewNovelData(
+                site  = "hameln",
+                title = titleMatch[3],
+                id    = titleMatch[2],
+                rate  = "",
+                body  = "",
+                desc  = p.extract('あらすじ</td></tr>\n<tr><td colspan="2">', '</td>'),
+                tags  = [],
+                orig  = titleMatch[1],
+                user  = ("", ""),
+                score = int(re.sub(r"[^0-9]", "", re.sub(r".*>([0-9,]*).", r"\1", p.extract('>お気に入り<', '件'))) or 0),
+                date  = datetime.datetime.strptime(re.sub(r"[^0-9]+", "-", p.extract('>掲載開始</td><td>', '<')), "%Y-%m-%d-%H-%M"),
+            )
+
+            if userHtml:
+                # '<a href="https://syosetu.org/user/NNNNNNN/">XXXX</a>' or 'XXXX'
+                if m := re.search(r'^(<a href="https://syosetu.org/user/(\d+)/">)?(.*?)(</a>)?$', userHtml):
+                    d.user = (m[2] or "", m[3])
+
+            if tagsHtml := p.extract('>タグ</td></tr>\n<tr>', '</tr>'):
+                for m in re.finditer(r"<a [^>]*>(.*?)</a>", tagsHtml):
+                    d.tags.append(m[1])
+
+            if gensakuHtml := p.extract('>原作<', '</tr>'):
+                if m := re.search(r".*>(.*?)</a>", gensakuHtml):
+                    d.tags = [m[1]] + d.tags
+
+            return d
+
+        @classmethod
+        def _extractNormal(cls, html):
+            p = StringParser(html)
+            return {
+                "body": p.extract('<div id="honbun">', '</div>')
+            }
+
 BACKEND_TABLE = {
     "pixiv": BackendPixiv,
+    "hameln": BackendHameln,
 }
 
 
@@ -590,6 +817,7 @@ class viewSearchData:
     items:  list[viewSearchDataItem]
     form:   list = dataclasses.field(default_factory=lambda: [])
     viewOption: Optional[viewSearchDataViewOption] = None
+    rate:   str = ""
 
 def viewSearch(d:viewSearchData):
 
@@ -603,6 +831,8 @@ def viewSearch(d:viewSearchData):
                 elem = f'<input type=number name="{x["name"]}" value="{values[x["name"]]}" size=3 min="{x.get("args", {}).get("min", 0)}">'
             elif x["type"] == "hidden":
                 elem = f'<input type=hidden name="{x["name"]}" value="{values[x["name"]]}">'
+            elif x["type"] == "checkbox":
+                elem = f'<input type=checkbox name="{x["name"]}" {"checked" if x["name"] in values and values[x["name"]] == "on" else ""}>'
             elif x["type"] == "select":
                 elem = f'<select name="{x["name"]}">\n'
                 for value, text in x["args"]:
@@ -829,6 +1059,47 @@ class Resources:
         def uploadedImage(cls, url):
             # headers2 = { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" }
             return httpGet(url, fmt="bytes", headers=cls._headers)
+
+class ResourceHameln:
+
+    _headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/png,image/svg+xml,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+        "Accept-Encoding": "gzip",
+        "Cookie": "viewmode=sp; over18=off; list_num=20", # list_num=10,20,50 other values will be ignored
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Priority": "u=0, i",
+        "Referer": "https://syosetu.org/",
+    }
+
+    @classmethod
+    @fcache(1200, lambda cls, q, page, rate: f"hameln-search-{rate}-{hashstr(q)}-{page}")
+    def search(cls, q:str, page:int, rate:Literal["N", "R", "T"]):
+        mode = { "N": "search", "R": "search_r18", "T": "search_tira" }[rate]
+        url = f"https://syosetu.org/search/?word={q}&page={page}&mode={mode}"
+        return httpGet(url, headers=cls._headers)
+
+    @classmethod
+    @fcache(7*86400, lambda cls, id, page: f"hameln-novel-{id}-{page}")
+    def novel(cls, id:int, page:int):
+        url = f"https://syosetu.org/novel/{id}" + (f"/{page}.html" if page else "")
+        return httpGet(url, headers=cls._headers)
+
+    @classmethod
+    @fcache(7*86400, lambda cls, id: f"hameln-novel-{id}-detail")
+    def novelDetail(cls, id:int):
+        url = f"https://syosetu.org/?mode=ss_detail&nid={id}"
+        return httpGet(url, headers=cls._headers)
+
+    @classmethod
+    @fcache(1200, lambda cls, id, page: f"hameln-user-{id}-{page}")
+    def user(cls, id:int, page:int):
+        url = f"https://syosetu.org/?mode=user_novel_list&uid={id}&page={page}"
+        return httpGet(url, headers={ **cls._headers, "Cookie": "viewmode=pc" })
 
 
 ### Character name colorizer
@@ -1207,6 +1478,9 @@ def loadPlugins(plugDir):
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
+
+def hashstr(s:str):
+    return hashlib.md5(s.encode()).hexdigest()[:8]
 
 
 ### test

@@ -3,6 +3,32 @@ TODO
 - cache search result
 - use external json for characters
 - scroll down button
+- rename fcache() and use string templating in fcache()
+
+CSS:
+dark mode
+custom css (hide user name)
+htmx
+
+Search:
+next/prev link
+encapsulate parameter as dataclass
+common/sort need to be selectively disabled
+must not crash in unwanted params are given from user
+- common
+  - query
+  - page
+  - count
+  - rate (n, r, g, all?)
+- sort
+  - default
+  - date
+  - like
+- extra
+  - key=val
+
+General:
+navigation top bar? (between sites)
 -->
 
 <!--

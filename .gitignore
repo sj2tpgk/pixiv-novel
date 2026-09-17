@@ -2,4 +2,5 @@ readme.html
 _cache/
 _save/
 __pycache__/
+.mypy_cache/
 plugin-*.py
