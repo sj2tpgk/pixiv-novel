@@ -44,6 +44,7 @@ CONFIG = {
     "nocolor"  : False,  # Disable colorizing character names?
     "savedir"  : "",     # Save novels directory ('' to disable)
     "noimage"  : False,  # Disable embedding images?
+    "ai"       : False,  # AI allowed?
 }
 
 emoji = { "love": "💙", "search": "🔍" }
@@ -181,8 +182,12 @@ class BackendPixiv:
                 desc   = x["description"],
                 score  = x["bookmarkCount"],
                 length = x["textCount"],
-                user   = (x["userId"], x["userName"])
+                user   = (x["userId"], x["userName"]),
+                ai     = x["aiType"] != 1
             ) for x in dataList]
+
+            if not CONFIG["ai"]:
+                items = [x for x in items if not x.ai]
 
             attr = lambda a, d: getattr(self, a) if hasattr(self, a) else d
 
@@ -798,6 +803,7 @@ class viewSearchDataItem:
     score:  int
     length: int
     user:   tuple[str, str] # (id, name)
+    ai:     bool = False
 
 @dataclasses.dataclass
 class viewSearchDataViewOption:
@@ -1521,8 +1527,8 @@ def test(cookie:str) -> None:
         fail += test("/")
         fail += test("/novel?id=15898879")
         fail += test("/search?q=" + up.quote("著作権フリー"))
-        fail += test("/user?id=15370995", r"\b14740676\b") # r-18 user result
-        fail += test("/search?q=" + up.quote("R-18 オリジナル 著作権フリー 短編小説 百合"), r"\b14740676\b") # r-18 search result
+        fail += test("/user?id=53420763", r"\b20316954\b") # r-18 user result
+        fail += test("/search?q=" + up.quote("ヤンデレ フリー台本 著作権フリー"), r"\b20316954\b") # r-18 search result
     finally:
         proc.kill()
         exit(1 if fail > 0 else 0)
@@ -1547,6 +1553,7 @@ def main():
     A("-p", "--port",     type=int, default=8080,            help="Port number" + D1)
     A("-s", "--savedir",  metavar="DIR", default="_save",    help="Auto save novels in this directory" + D2)
     A("-v", "--verbose",  action="store_true",               help="Verbose mode")
+    A("--ai",      action="store_true", help="Allow ai")
     A("--browser", action="store_true", help="Open in browser")
     A("--nocolor", action="store_true", help="Disable character name colors")
     A("--noimage", action="store_true", help="Disable image embedding")
@@ -1557,6 +1564,7 @@ def main():
     args = parser.parse_args()
 
     # Save some options on global
+    CONFIG["ai"]       = args.ai
     CONFIG["cachedir"] = args.cachedir
     CONFIG["nocolor"]  = args.nocolor
     CONFIG["savedir"]  = args.savedir
